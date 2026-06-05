@@ -36,35 +36,40 @@ export class ClaudeProvider implements DesktopProvider {
 
   async createPreparedSession(input: PreparedSessionInput): Promise<ProviderSession> {
     const before = snapshotSessionIds();
+    // ONE atomic shield call: Ctrl+3 -> Ctrl+N -> inject prompt -> rename, all
+    // under a single held HID lock (no inter-step interleaving; safe against
+    // concurrent processes/providers). The title is bundled into the call.
     const createResult = await claudeShield.createSession(input.prompt, {
+      title: input.title,
       timeoutSeconds: DEFAULT_TIMEOUT_SECONDS,
     });
     if (!createResult.success) throw new Error(createResult.error || 'Claude new-session automation failed');
 
-    // The two-step /rename is intermittently flaky — the title can fail to
-    // apply and Claude auto-titles instead. Verify against the session list
-    // (non-OCR, metadata is the source of truth) and retry a few times.
+    // The bundled rename is still occasionally flaky; verify it applied and, if
+    // not, retry with a standalone rename (non-OCR; metadata is the truth).
     await this.renameWithVerify(input.title, before);
 
     return await this.findCreatedSession(input.title, before);
   }
 
-  private async renameWithVerify(title: string, beforeIds: Set<string>, attempts = 3): Promise<boolean> {
+  private async renameWithVerify(title: string, beforeIds: Set<string>, attempts = 2): Promise<boolean> {
     const stable = (id: string | null | undefined): id is string =>
       typeof id === 'string' && id.startsWith('local_');
+    const applied = () => claudeSessions.listSessions({ limit: 500, provider: 'claude' })
+      .some(s => s.title === title && stable(s.sessionId) && !beforeIds.has(s.sessionId));
+    // The atomic create already attempts the rename — verify BEFORE re-doing it.
+    await new Promise(resolve => setTimeout(resolve, 800));
+    if (applied()) return true;
     let lastErr: string | undefined;
     for (let i = 0; i < attempts; i++) {
       const rr = await claudeShield.renameCurrent(title, { timeoutSeconds: 45 });
       if (!rr.success) lastErr = rr.error;
-      // Let the rename + Ctrl+R index rebuild settle, then verify it applied.
       await new Promise(resolve => setTimeout(resolve, 800));
-      const applied = claudeSessions.listSessions({ limit: 500, provider: 'claude' })
-        .some(s => s.title === title && stable(s.sessionId) && !beforeIds.has(s.sessionId));
-      if (applied) return true;
+      if (applied()) return true;
     }
-    // Best-effort: the session still exists and is resolvable by stable id /
-    // its actual title via findCreatedSession, so a missed rename is non-fatal.
-    console.warn(`[claude] rename did not apply after ${attempts} attempts (title="${title}"${lastErr ? `, lastErr=${lastErr}` : ''})`);
+    // Best-effort: the session is still resolvable by stable id / its actual
+    // title via findCreatedSession, so a missed rename is non-fatal.
+    console.warn(`[claude] rename did not apply after atomic create + ${attempts} retries (title="${title}"${lastErr ? `, lastErr=${lastErr}` : ''})`);
     return false;
   }
 
