@@ -40,6 +40,16 @@ Clients opt into richer readback through request metadata:
 }
 ```
 
+The same mode can be overridden during polling:
+
+```http
+GET /v1/responses/codex_abc123?readback=events&include_subagents=true
+```
+
+Query parameters are useful when a client creates a response with the default
+plain-text contract but later needs a diagnostic timeline. Query values override
+the stored request metadata for that poll only.
+
 Supported `metadata.readback` values:
 
 | Mode | Purpose | Response shape |
@@ -195,6 +205,12 @@ need to understand in-process state. Clients may still use `output_text` for a
 plain assistant summary, but `blur_messages` is the authoritative structured
 event stream for this mode.
 
+The gateway always emits a `status_update` event in events mode. Tool calls,
+tool results, usage snapshots, file positions, and subagent child events are
+included where the underlying provider or Bridge reader exposes them. Missing
+optional event types mean "not available from this readback surface", not "did
+not happen."
+
 ## Partial information
 
 Desktop providers expose partial data while work is still in progress. The
@@ -339,6 +355,8 @@ Known provider differences:
   turn id.
 - Tool call and result payload shapes differ.
 - Usage/counter data is richer in some Codex records than in Claude records.
+- The current Bridge readback adapters expose tool calls more consistently than
+  tool results, usage counters, and file positions.
 
 The external schema stays stable. Provider-specific details may be exposed under
 `provider_event` only when requested.

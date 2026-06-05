@@ -63,6 +63,12 @@ export type BlurMessage = {
   tool_name?: string | null;
   arguments?: unknown;
   result_text?: string | null;
+  status?: string | null;
+  title?: string | null;
+  parent_response_id?: string | null;
+  subagent_response_id?: string | null;
+  usage?: Record<string, unknown>;
+  file_position?: Record<string, unknown>;
   revision?: number;
   final?: boolean;
 };

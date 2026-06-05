@@ -8,7 +8,7 @@ import { id } from '../utils/ids';
 import { readJson, sendJson } from '../utils/http';
 import { createWorkspace, attachFilesToWorkspace } from '../storage/files';
 import { getProvider, providerFromModel } from '../providers';
-import { normalizeReadbackMode } from '../providers/readback';
+import { eventId, normalizeReadbackMode } from '../providers/readback';
 import type { BlurMessage, ReadbackMode } from '../types/provider';
 
 const bridgeRequire = createRequire(path.join(config.bridgeRoot, 'package.json'));
@@ -180,7 +180,15 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
   let outputText = row.output_text;
   let status = row.status;
   const storedInput = safeJson(row.input_json);
-  const readbackMode = readbackModeFromBody(storedInput as Record<string, unknown> | null);
+  const requestUrl = requestUrlFromIncoming(_req);
+  const readbackMode = readbackModeFromBody(storedInput as Record<string, unknown> | null, requestUrl);
+  const includeSubagents = includeSubagentsFromBody(storedInput as Record<string, unknown> | null, requestUrl);
+  const inputPrompt = storedInput && typeof storedInput === 'object' && !Array.isArray(storedInput)
+    ? inputToText((storedInput as Record<string, unknown>).input)
+    : '';
+  const spawnEvent = readbackMode === 'events' && isBlurSpawn(normalizeInput(inputPrompt))
+    ? subagentSpawnEvent(row, storedInput as Record<string, unknown> | null)
+    : null;
   let blurMessages: BlurMessage[] | undefined;
   let highWaterMark = highWaterFromBody(safeJson(row.input_json) as Record<string, unknown> | null)?.mark || null;
   if (row.provider_session_id) {
@@ -208,6 +216,15 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
     } catch {
       // Keep stored response state when provider readback is unavailable.
     }
+  }
+  if (readbackMode === 'events') {
+    const events = blurMessages ? [...blurMessages] : [];
+    if (spawnEvent) {
+      blurMessages = includeSubagents ? [spawnEvent, ...events] : [spawnEvent];
+    } else {
+      blurMessages = events;
+    }
+    blurMessages.push(statusUpdateEvent(row, status));
   }
   sendJson(res, 200, responseObject({
     id: row.id,
@@ -460,12 +477,76 @@ function highWaterFromBody(body: Record<string, unknown> | null | undefined): Hi
   return decodeHighWaterMark(direct || nested);
 }
 
-function readbackModeFromBody(body: Record<string, unknown> | null | undefined): ReadbackMode {
+function readbackModeFromBody(body: Record<string, unknown> | null | undefined, url?: URL | null): ReadbackMode {
+  const queryReadback = url?.searchParams.get('readback');
+  if (queryReadback) return normalizeReadbackMode(queryReadback);
   if (!body || typeof body !== 'object' || Array.isArray(body)) return 'text';
   const metadata = body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
     ? body.metadata as Record<string, unknown>
     : null;
   return normalizeReadbackMode(metadata?.readback || body.readback);
+}
+
+function includeSubagentsFromBody(body: Record<string, unknown> | null | undefined, url?: URL | null): boolean {
+  const queryValue = url?.searchParams.get('include_subagents');
+  if (typeof queryValue === 'string') return queryValue === 'true' || queryValue === '1';
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false;
+  const metadata = body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
+    ? body.metadata as Record<string, unknown>
+    : null;
+  return Boolean(metadata?.include_subagents ?? body.include_subagents);
+}
+
+function requestUrlFromIncoming(req: IncomingMessage): URL | null {
+  try {
+    return new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  } catch {
+    return null;
+  }
+}
+
+function subagentSpawnEvent(row: any, input: Record<string, unknown> | null): BlurMessage {
+  const prompt = input && typeof input === 'object' ? inputToText(input.input) : '';
+  const parsed = blurSpawn.parseBlurSpawnArgs(normalizeInput(prompt));
+  const timestamp = row.updated_at || row.created_at || new Date().toISOString();
+  return {
+    id: eventId([row.provider, row.id, row.provider_session_id, timestamp, 'subagent_spawn']),
+    type: 'subagent_spawn',
+    role: 'system',
+    text: parsed.title ? `Spawned ${parsed.title}` : 'Spawned subagent session',
+    timestamp,
+    turn_id: `turn_${row.id}`,
+    provider: row.provider,
+    provider_session_id: row.provider_session_id || null,
+    response_id: row.id,
+    native_type: 'blur.spawn',
+    native_id: row.id,
+    parent_response_id: row.previous_response_id || null,
+    subagent_response_id: row.id,
+    title: parsed.title || row.provider_session_title || row.title || null,
+    revision: 1,
+    final: row.status !== 'in_progress',
+  };
+}
+
+function statusUpdateEvent(row: any, status: string): BlurMessage {
+  const timestamp = row.updated_at || row.created_at || new Date().toISOString();
+  return {
+    id: eventId([row.provider, row.id, row.provider_session_id, timestamp, status, 'status_update']),
+    type: 'status_update',
+    role: 'system',
+    text: `${row.provider} response ${status}`,
+    timestamp,
+    turn_id: `turn_${row.id}`,
+    provider: row.provider,
+    provider_session_id: row.provider_session_id || null,
+    response_id: row.id,
+    native_type: 'blur-gateway:response_status',
+    native_id: row.id,
+    status,
+    revision: 1,
+    final: status !== 'in_progress',
+  };
 }
 
 function encodeHighWaterMark(input: { provider?: string; sessionId?: string; timestamp: string }): string {
