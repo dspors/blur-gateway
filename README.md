@@ -55,17 +55,46 @@ Prerequisites:
 - Claude Desktop and/or Codex Desktop running on the interactive desktop being
   automated. Do not run the smoke tests from a locked or disconnected desktop.
 
+Example macOS setup:
+
+```bash
+cd /Users/danielspors
+git clone https://github.com/dspors/blur-db.git blur-db
+
+cd /Users/danielspors/blur-db
+npm install
+npm run build
+
+cd /Users/danielspors/blur-gateway
+npm install
+npm run check
+npm run build
+BLUR_GATEWAY_PORT=3480 npm start
+```
+
 Example PowerShell setup:
 
 ```powershell
+cd C:\Users\dspors
+git clone https://github.com/dspors/blur-db.git blur-db
+
+cd C:\Users\dspors\blur-db
+npm install
+npm run build
+
 cd C:\Users\dspors\blur-gateway
 npm install
+npm run check
 npm run build
 
 $env:BRIDGE_ROOT = "C:\Users\dspors\bridge"
 $env:BLUR_GATEWAY_PORT = "3480"
 npm start
 ```
+
+`blur-db` must be built before `blur-gateway` is checked or built because the
+gateway resolves `blur-db` through `node_modules/blur-db -> ../blur-db`, and the
+package publishes its runtime and type entrypoints from `blur-db/dist`.
 
 PM2 example:
 
