@@ -1,5 +1,4 @@
-import fs from 'node:fs';
-import path from 'node:path';
+import crypto from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { db } from '../db/sqlite';
 import { id } from '../utils/ids';
@@ -12,10 +11,13 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
   const model = stringField(body.model) || 'codex-desktop';
   const previousResponseId = stringField(body.previous_response_id);
   const provider = providerFromModel(model);
+  const requestContext = (req as any).blurGateway as Record<string, unknown> | undefined;
+  if (requestContext) requestContext.provider = provider.name;
   let responseId: string;
   const now = new Date().toISOString();
   const prompt = inputToText(body.input);
   const fileIds = extractFileIds(body);
+  const normalizedInput = normalizeInput(prompt);
 
   if (!prompt.trim()) {
     sendJson(res, 400, { error: { message: 'Missing input text' } });
@@ -57,7 +59,20 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
   }
 
   const attached = attachFilesToWorkspace(responseId, fileIds, chain.workspace_dir || chain.workspaceDir);
-  const effectivePrompt = attached.length ? `${prompt}\n\nAttached files are available in:\n${attached.map(p => `- ${p}`).join('\n')}` : prompt;
+  if (requestContext) {
+    requestContext.responseId = responseId;
+    requestContext.provider = chain.provider;
+  }
+  const delta = computeInjectionDelta(chain, normalizedInput, isNewChain);
+  const effectivePromptBase = delta.injectedText || prompt;
+  const effectivePrompt = attached.length
+    ? `${effectivePromptBase}\n\nAttached files are available in:\n${attached.map(p => `- ${p}`).join('\n')}`
+    : effectivePromptBase;
+  const inputState = {
+    text: normalizedInput,
+    len: normalizedInput.length,
+    hash: hashInput(normalizedInput),
+  };
 
   db.upsertResponse({
     id: responseId,
@@ -76,6 +91,18 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
     chain,
     prompt: effectivePrompt,
     isNewChain,
+    inputState,
+    metric: {
+      id: id('metric'),
+      provider: chain.provider,
+      startedAt: now,
+      isNewSession: isNewChain,
+      hadPreviousResponseId: Boolean(previousResponseId),
+      inputChars: normalizedInput.length,
+      injectedChars: effectivePrompt.length,
+      deltaStripped: delta.stripped,
+      fileCount: fileIds.length,
+    },
   }).catch(err => {
     db.updateResponse(responseId, { status: 'failed', error: err.message || String(err) });
   });
@@ -94,6 +121,11 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
   if (!row) {
     sendJson(res, 404, { error: { message: `Unknown response: ${responseId}` } });
     return;
+  }
+  const requestContext = (_req as any).blurGateway as Record<string, unknown> | undefined;
+  if (requestContext) {
+    requestContext.responseId = row.id;
+    requestContext.provider = row.provider;
   }
   let outputText = row.output_text;
   let status = row.status;
@@ -128,47 +160,92 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
   }));
 }
 
-async function runResponse(opts: { responseId: string; chain: any; prompt: string; isNewChain: boolean }): Promise<void> {
+async function runResponse(opts: { responseId: string; chain: any; prompt: string; isNewChain: boolean; inputState: { text: string; len: number; hash: string }; metric: any }): Promise<void> {
   const provider = getProvider(opts.chain.provider);
-
-  if (opts.prompt.startsWith('/blur.archive')) {
-    if (provider.archive) {
-      await provider.archive(sendInput(opts));
-    }
-    db.archiveChain(opts.chain.id);
-    db.updateResponse(opts.responseId, { status: 'completed', outputText: 'Archived.' });
-    return;
-  }
-
-  if (opts.prompt.startsWith('/blur.rename ')) {
-    const newTitle = opts.prompt.slice('/blur.rename '.length).trim();
-    if (!newTitle) throw new Error('Missing title for /blur.rename');
-    if (provider.rename) {
-      await provider.rename(sendInput(opts), newTitle);
-    } else {
-      await provider.send({ ...sendInput(opts), prompt: opts.prompt });
-    }
-    db.updateResponse(opts.responseId, { status: 'completed', outputText: `Renamed to ${newTitle}.` });
-    return;
-  }
-
-  if (opts.isNewChain) {
-    const session = await provider.createPreparedSession({
-      chainId: opts.chain.id,
-      responseId: opts.responseId,
-      title: opts.chain.title,
-      workspaceDir: opts.chain.workspaceDir,
-      prompt: opts.prompt,
-    });
-    db.updateChainSession(opts.chain.id, session.providerSessionId, session.providerSessionTitle);
-  } else {
-    await provider.send(sendInput(opts));
-  }
-
-  db.updateResponse(opts.responseId, {
-    status: 'completed',
-    outputText: null,
+  const startMs = Date.now();
+  db.insertResponseMetric({
+    id: opts.metric.id,
+    responseId: opts.responseId,
+    provider: opts.metric.provider,
+    startedAt: opts.metric.startedAt,
+    isNewSession: opts.metric.isNewSession,
+    hadPreviousResponseId: opts.metric.hadPreviousResponseId,
+    inputChars: opts.metric.inputChars,
+    injectedChars: opts.metric.injectedChars,
+    deltaStripped: opts.metric.deltaStripped,
+    fileCount: opts.metric.fileCount,
+    automationStatus: 'started',
   });
+
+  try {
+    if (opts.prompt.startsWith('/blur.archive')) {
+      if (provider.archive) {
+        await provider.archive(sendInput(opts));
+      }
+      db.archiveChain(opts.chain.id);
+      db.updateResponse(opts.responseId, { status: 'completed', outputText: 'Archived.' });
+      db.updateResponseMetric(opts.metric.id, {
+        completedAt: new Date().toISOString(),
+        automationStatus: 'completed',
+        automationDurationMs: Date.now() - startMs,
+        finalStatus: 'completed',
+      });
+      return;
+    }
+
+    if (opts.prompt.startsWith('/blur.rename ')) {
+      const newTitle = opts.prompt.slice('/blur.rename '.length).trim();
+      if (!newTitle) throw new Error('Missing title for /blur.rename');
+      if (provider.rename) {
+        await provider.rename(sendInput(opts), newTitle);
+      } else {
+        await provider.send({ ...sendInput(opts), prompt: opts.prompt });
+      }
+      db.updateResponse(opts.responseId, { status: 'completed', outputText: `Renamed to ${newTitle}.` });
+      db.updateResponseMetric(opts.metric.id, {
+        completedAt: new Date().toISOString(),
+        automationStatus: 'completed',
+        automationDurationMs: Date.now() - startMs,
+        finalStatus: 'completed',
+      });
+      return;
+    }
+
+    if (opts.isNewChain) {
+      const session = await provider.createPreparedSession({
+        chainId: opts.chain.id,
+        responseId: opts.responseId,
+        title: opts.chain.title,
+        workspaceDir: opts.chain.workspaceDir,
+        prompt: opts.prompt,
+      });
+      db.updateChainSession(opts.chain.id, session.providerSessionId, session.providerSessionTitle);
+    } else {
+      await provider.send(sendInput(opts));
+    }
+
+    db.updateChainInputState(opts.chain.id, opts.inputState);
+    db.updateResponse(opts.responseId, {
+      status: 'completed',
+      outputText: null,
+    });
+    db.updateResponseMetric(opts.metric.id, {
+      completedAt: new Date().toISOString(),
+      automationStatus: 'completed',
+      automationDurationMs: Date.now() - startMs,
+      finalStatus: 'completed',
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    db.updateResponseMetric(opts.metric.id, {
+      completedAt: new Date().toISOString(),
+      automationStatus: 'failed',
+      automationDurationMs: Date.now() - startMs,
+      finalStatus: 'failed',
+      error: message,
+    });
+    throw err;
+  }
 }
 
 function sendInput(opts: { responseId: string; chain: any; prompt: string }) {
@@ -265,4 +342,27 @@ function safeJson(value: string): unknown {
   } catch {
     return null;
   }
+}
+
+function normalizeInput(text: string): string {
+  return text.replace(/\r\n/g, '\n').trimEnd();
+}
+
+function hashInput(text: string): string {
+  return crypto.createHash('sha256').update(text).digest('hex');
+}
+
+function computeInjectionDelta(chain: any, normalizedInput: string, isNewChain: boolean): { injectedText: string; stripped: boolean } {
+  if (isNewChain) return { injectedText: normalizedInput, stripped: false };
+  const priorLen = Number(chain.last_input_len || 0);
+  const priorHash = typeof chain.last_input_hash === 'string' ? chain.last_input_hash : '';
+  if (!priorLen || !priorHash || normalizedInput.length < priorLen) {
+    return { injectedText: normalizedInput, stripped: false };
+  }
+  const prefix = normalizedInput.slice(0, priorLen);
+  if (hashInput(prefix) !== priorHash) {
+    return { injectedText: normalizedInput, stripped: false };
+  }
+  const suffix = normalizedInput.slice(priorLen).trimStart();
+  return { injectedText: suffix || normalizedInput, stripped: Boolean(suffix) };
 }

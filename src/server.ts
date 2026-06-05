@@ -4,9 +4,11 @@ import { config } from './config';
 import { db } from './db/sqlite';
 import { ensureStorage } from './storage/files';
 import { notFound, sendJson } from './utils/http';
+import { id } from './utils/ids';
 import { createResponse, getResponse } from './routes/responses';
 import { createFile, getFileContent } from './routes/files';
 import { listDesktopSessions } from './routes/desktop';
+import { getMetrics, listRequests } from './routes/admin';
 
 function init(): void {
   fs.mkdirSync(config.storageRoot, { recursive: true });
@@ -15,6 +17,36 @@ function init(): void {
 }
 
 const server = http.createServer(async (req, res) => {
+  const started = Date.now();
+  const requestId = id('req');
+  const requestContext: Record<string, unknown> = { requestId };
+  (req as any).blurGateway = requestContext;
+  res.setHeader('x-request-id', requestId);
+  res.once('finish', () => {
+    try {
+      const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+      db.insertRequestLog({
+        id: requestId,
+        timestamp: new Date(started).toISOString(),
+        method: req.method || '',
+        path: url.pathname,
+        statusCode: res.statusCode,
+        durationMs: Date.now() - started,
+        remoteAddr: req.socket.remoteAddress || null,
+        userAgent: headerString(req.headers['user-agent']),
+        host: headerString(req.headers.host),
+        xForwardedFor: headerString(req.headers['x-forwarded-for']),
+        xRequestId: headerString(req.headers['x-request-id']),
+        authorizationPresent: Boolean(req.headers.authorization),
+        contentLength: req.headers['content-length'] ? Number(req.headers['content-length']) : null,
+        responseId: typeof requestContext.responseId === 'string' ? requestContext.responseId : null,
+        provider: typeof requestContext.provider === 'string' ? requestContext.provider : null,
+        error: typeof requestContext.error === 'string' ? requestContext.error : null,
+      });
+    } catch (err) {
+      console.error('[blur-gateway] request log failed:', err instanceof Error ? err.message : String(err));
+    }
+  });
   try {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
 
@@ -50,9 +82,20 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'GET' && url.pathname === '/v1/admin/metrics') {
+      await getMetrics(req, res, url);
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/v1/admin/requests') {
+      await listRequests(req, res, url);
+      return;
+    }
+
     notFound(res);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    requestContext.error = message;
     sendJson(res, 500, { error: { message } });
   }
 });
@@ -61,3 +104,8 @@ init();
 server.listen(config.port, () => {
   console.log(`[blur-gateway] listening on http://localhost:${config.port}`);
 });
+
+function headerString(value: string | string[] | undefined): string | null {
+  if (Array.isArray(value)) return value.join(', ');
+  return value || null;
+}
