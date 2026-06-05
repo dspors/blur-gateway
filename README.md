@@ -16,10 +16,12 @@ Defaults:
 
 - Port: `3480`
 - Storage root: `~/.blur-gateway`
-- First provider: `codex`
-- Provider selection: `model`, e.g. `codex-desktop` or later `claude-desktop`
-- Response ids are stable session ids. A new Codex chain returns `codex_<id>`;
-  follow-up calls with `previous_response_id` return the same id.
+- Providers: `codex-desktop` and `claude-desktop`
+- Provider selection: `model`, e.g. `codex-desktop` or `claude-desktop`
+- Response ids are stable session ids. A new chain returns a provider-prefixed
+  id such as `codex_<id>` or `claude_<id>`; follow-up calls with
+  `previous_response_id` return the same id.
+- Bridge repo: `BRIDGE_ROOT`, defaulting to `/Users/danielspors/bridge`
 
 Metrics:
 
@@ -37,3 +39,64 @@ npm install
 npm run build
 BLUR_GATEWAY_PORT=3480 npm start
 ```
+
+Windows setup:
+
+Prerequisites:
+
+- Node.js/npm
+- PM2 installed globally if the gateway should run under PM2
+- .NET SDK 8 or newer for the Windows shield helpers
+- A local Bridge checkout. The gateway imports Bridge provider and shield modules
+  directly, so `BRIDGE_ROOT` must point at the Bridge repo on Windows.
+- Claude Desktop and/or Codex Desktop running on the interactive desktop being
+  automated. Do not run the smoke tests from a locked or disconnected desktop.
+
+Example PowerShell setup:
+
+```powershell
+cd C:\Users\dspors\blur-gateway
+npm install
+npm run build
+
+$env:BRIDGE_ROOT = "C:\Users\dspors\bridge"
+$env:BLUR_GATEWAY_PORT = "3480"
+npm start
+```
+
+PM2 example:
+
+```powershell
+cd C:\Users\dspors\blur-gateway
+pm2 start npm --name blur-gateway -- start
+pm2 save
+```
+
+If PM2 is used, make sure `BRIDGE_ROOT` and `BLUR_GATEWAY_PORT` are available in
+the PM2 process environment. One option is to start it from a shell where those
+variables are already set.
+
+Windows smoke tests:
+
+```powershell
+curl http://localhost:3480/v1/desktop/sessions
+curl http://localhost:3480/v1/admin/metrics
+curl -X POST http://localhost:3480/v1/responses `
+  -H "Content-Type: application/json" `
+  -d "{\"model\":\"claude-desktop\",\"input\":\"Reply exactly: claude windows smoke ok\"}"
+```
+
+Codex Windows status:
+
+- Existing-session Codex sends use the Windows Codex HID shield.
+- New Codex session creation uses the gateway prepared-session path. The macOS
+  shield supports that path, including `/project <dir>`, but the Windows Codex
+  shield still needs parity work before Codex create-session should be treated as
+  complete on Windows.
+
+Claude Windows status:
+
+- Claude send, create, rename, and spawn/fork paths route through the Windows
+  Claude HID shield.
+- Spawn/fork support requires an existing Claude parent session and uses the
+  guarded shield path with `--spawn`, `--rename-title`, and `--prompt-after`.
