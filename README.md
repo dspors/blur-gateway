@@ -16,6 +16,8 @@ Defaults:
 - Storage root: `~/.blur-gateway`
 - First provider: `codex`
 - Provider selection: `model`, e.g. `codex-desktop` or later `claude-desktop`
+- Response ids are stable session ids. A new Codex chain returns `codex_<id>`;
+  follow-up calls with `previous_response_id` return the same id.
 
 Run:
 

@@ -11,7 +11,8 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
   const body = await readJson(req);
   const model = stringField(body.model) || 'codex-desktop';
   const previousResponseId = stringField(body.previous_response_id);
-  const responseId = id('resp');
+  const provider = providerFromModel(model);
+  let responseId: string;
   const now = new Date().toISOString();
   const prompt = inputToText(body.input);
   const fileIds = extractFileIds(body);
@@ -29,18 +30,18 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
       sendJson(res, 404, { error: { message: `Unknown previous_response_id: ${previousResponseId}` } });
       return;
     }
+    responseId = previous.id;
     chain = db.getChain(previous.chain_id);
     if (!chain) {
       sendJson(res, 500, { error: { message: `Response chain missing for ${previousResponseId}` } });
       return;
     }
   } else {
-    const provider = providerFromModel(model);
-    const chainId = id('chain');
-    const workspaceDir = createWorkspace(chainId);
-    const title = titleFromMetadata(body.metadata) || `blur-gateway ${responseId}`;
+    responseId = id(provider.name);
+    const workspaceDir = createWorkspace(responseId);
+    const title = titleFromMetadata(body.metadata) || responseId;
     chain = {
-      id: chainId,
+      id: responseId,
       provider: provider.name,
       model,
       title,
@@ -58,7 +59,7 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
   const attached = attachFilesToWorkspace(responseId, fileIds, chain.workspace_dir || chain.workspaceDir);
   const effectivePrompt = attached.length ? `${prompt}\n\nAttached files are available in:\n${attached.map(p => `- ${p}`).join('\n')}` : prompt;
 
-  db.insertResponse({
+  db.upsertResponse({
     id: responseId,
     chainId: chain.id,
     previousResponseId,

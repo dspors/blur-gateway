@@ -111,6 +111,21 @@ export class Sqlite {
               ${sqlString(response.error)}, ${sqlString(response.createdAt)}, ${sqlString(response.updatedAt)});`);
   }
 
+  upsertResponse(response: any): void {
+    this.exec(`insert into responses (id, chain_id, previous_response_id, status, input_json, output_text, error, created_at, updated_at)
+      values (${sqlString(response.id)}, ${sqlString(response.chainId)}, ${sqlString(response.previousResponseId)},
+              ${sqlString(response.status)}, ${sqlString(JSON.stringify(response.input))}, ${sqlString(response.outputText)},
+              ${sqlString(response.error)}, ${sqlString(response.createdAt)}, ${sqlString(response.updatedAt)})
+      on conflict(id) do update set
+        previous_response_id = excluded.previous_response_id,
+        status = excluded.status,
+        input_json = excluded.input_json,
+        output_text = excluded.output_text,
+        error = excluded.error,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at;`);
+  }
+
   updateResponse(responseId: string, fields: { status?: string; outputText?: string | null; error?: string | null }): void {
     const sets = [`updated_at = ${sqlString(new Date().toISOString())}`];
     if (fields.status !== undefined) sets.push(`status = ${sqlString(fields.status)}`);
