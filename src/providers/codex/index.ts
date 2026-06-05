@@ -73,7 +73,7 @@ export class CodexProvider implements DesktopProvider {
     }));
   }
 
-  async readLatest(sessionId: string, sinceIso?: string, prompt?: string): Promise<{ status?: string; outputText?: string | null }> {
+  async readLatest(sessionId: string, sinceIso?: string, prompt?: string): Promise<{ status?: string; outputText?: string | null; highWaterIso?: string | null }> {
     const session = codexSessions.getCodexSession(sessionId);
     const sinceMs = sinceIso ? Date.parse(sinceIso) : 0;
     const messages = codexSessions.readTranscript(sessionId, { maxMessages: 100, mode: 'normal' });
@@ -83,7 +83,7 @@ export class CodexProvider implements DesktopProvider {
       if (!message.content.includes(prompt)) return false;
       if (!sinceMs || !message.timestamp) return true;
       const ts = Date.parse(message.timestamp);
-      return Number.isFinite(ts) && ts >= sinceMs;
+      return Number.isFinite(ts) && ts > sinceMs;
     }) : -1;
     const searchSpace = startIndex >= 0 ? messages.slice(startIndex + 1) : messages;
     const assistantMessages = searchSpace.filter(message => {
@@ -91,12 +91,13 @@ export class CodexProvider implements DesktopProvider {
       if (!message.content) return false;
       if (!sinceMs || !message.timestamp) return true;
       const ts = Date.parse(message.timestamp);
-      return Number.isFinite(ts) && ts >= sinceMs;
+      return Number.isFinite(ts) && ts > sinceMs;
     });
     const assistant = startIndex >= 0 ? assistantMessages[0] : assistantMessages.at(-1);
     return {
       status: session?.status,
       outputText: assistant?.content || session?.statusDetail || null,
+      highWaterIso: assistant?.timestamp || null,
     };
   }
 

@@ -129,9 +129,9 @@ export class ClaudeProvider implements DesktopProvider {
       }));
   }
 
-  async readLatest(sessionId: string, sinceIso?: string, prompt?: string): Promise<{ status?: string; outputText?: string | null }> {
+  async readLatest(sessionId: string, sinceIso?: string, prompt?: string): Promise<{ status?: string; outputText?: string | null; highWaterIso?: string | null }> {
     const session = findSessionById(sessionId);
-    if (!session?.jsonlPath) return { outputText: null };
+    if (!session?.jsonlPath) return { outputText: null, highWaterIso: null };
 
     const sinceMs = sinceIso ? Date.parse(sinceIso) : 0;
     const messages = await claudeSessions.readSession(session.jsonlPath, { maxMessages: 200 });
@@ -143,7 +143,7 @@ export class ClaudeProvider implements DesktopProvider {
       if (!text.includes(prompt)) return false;
       if (!sinceMs || !message.timestamp) return true;
       const ts = Date.parse(message.timestamp);
-      return Number.isFinite(ts) && ts >= sinceMs;
+      return Number.isFinite(ts) && ts > sinceMs;
     }) : -1;
     const searchSpace = startIndex >= 0 ? messages.slice(startIndex + 1) : messages;
     const assistantMessages = searchSpace.filter(message => {
@@ -153,12 +153,13 @@ export class ClaudeProvider implements DesktopProvider {
       if (!text) return false;
       if (!sinceMs || !message.timestamp) return true;
       const ts = Date.parse(message.timestamp);
-      return Number.isFinite(ts) && ts >= sinceMs;
+      return Number.isFinite(ts) && ts > sinceMs;
     });
     const assistant = startIndex >= 0 ? assistantMessages[0] : assistantMessages.at(-1);
     return {
       status: health?.status || health?.message,
       outputText: assistant ? contentToText(assistant.content) : health?.detail || null,
+      highWaterIso: assistant?.timestamp || null,
     };
   }
 

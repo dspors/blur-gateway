@@ -53,6 +53,6 @@ export interface DesktopProvider {
   rename?(session: SendInput, title: string): Promise<void>;
   archive?(session: SendInput): Promise<void>;
   unarchive?(session: SendInput): Promise<void>;
-  readLatest?(sessionId: string, sinceIso?: string, prompt?: string): Promise<{ status?: string; outputText?: string | null }>;
+  readLatest?(sessionId: string, sinceIso?: string, prompt?: string): Promise<{ status?: string; outputText?: string | null; highWaterIso?: string | null }>;
   listSessions(): Promise<DesktopSession[]>;
 }

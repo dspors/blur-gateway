@@ -21,7 +21,34 @@ Defaults:
 - Response ids are stable session ids. A new chain returns a provider-prefixed
   id such as `codex_<id>` or `claude_<id>`; follow-up calls with
   `previous_response_id` return the same id.
+- Poll responses include `metadata.message_high_water_mark` when readback has
+  returned an assistant message. Clients should send that opaque value back as
+  `previous_response_high_water_mark` or `metadata.message_high_water_mark` on
+  the next `POST /v1/responses` so desktop transcript readback resumes after the
+  last assistant message the client actually retrieved.
 - Bridge repo: `BRIDGE_ROOT`, defaulting to `/Users/danielspors/bridge`
+
+Response high-water marks:
+
+`previous_response_id` identifies the stable desktop session chain. The optional
+message high-water mark identifies how far the client has consumed assistant
+messages from that chain. This lets a client submit another prompt while still
+controlling where the next poll starts reading transcript output.
+
+Example follow-up request:
+
+```json
+{
+  "model": "codex-desktop",
+  "previous_response_id": "codex_abc123",
+  "previous_response_high_water_mark": "<metadata.message_high_water_mark from the last poll>",
+  "input": "Continue from there."
+}
+```
+
+If a client sends multiple prompts without polling and carrying forward the
+latest mark, the mark remains behind. That is intentional: the next poll resumes
+from the last assistant message the client actually observed.
 
 Metrics:
 

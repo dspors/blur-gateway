@@ -27,6 +27,7 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
   const body = await readJson(req);
   let model = stringField(body.model) || 'codex-desktop';
   const previousResponseId = stringField(body.previous_response_id);
+  const previousHighWater = highWaterFromBody(body);
   let provider = providerFromModel(model);
   const requestContext = (req as any).blurGateway as Record<string, unknown> | undefined;
   if (requestContext) requestContext.provider = provider.name;
@@ -137,6 +138,7 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
     prompt: effectivePrompt,
     isNewChain,
     inputState,
+    previousHighWaterIso: previousHighWater?.timestamp || null,
     metric: {
       id: id('metric'),
       provider: chain.provider,
@@ -158,6 +160,7 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
     model,
     outputText: null,
     chain,
+    highWaterMark: previousHighWater?.mark || null,
   }));
 }
 
@@ -174,14 +177,23 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
   }
   let outputText = row.output_text;
   let status = row.status;
+  let highWaterMark = highWaterFromBody(safeJson(row.input_json) as Record<string, unknown> | null)?.mark || null;
   if (row.provider_session_id) {
     try {
       const input = safeJson(row.input_json);
+      const priorHighWater = input && typeof input === 'object' && !Array.isArray(input)
+        ? highWaterFromBody(input as Record<string, unknown>)
+        : null;
       const prompt = input && typeof input === 'object' && !Array.isArray(input)
         ? inputToText((input as Record<string, unknown>).input)
         : undefined;
-      const latest = await getProvider(row.provider).readLatest?.(row.provider_session_id, row.created_at, prompt);
+      const latest = await getProvider(row.provider).readLatest?.(row.provider_session_id, priorHighWater?.timestamp || row.created_at, prompt);
       if (latest?.outputText) outputText = latest.outputText;
+      if (latest?.highWaterIso) highWaterMark = encodeHighWaterMark({
+        provider: row.provider,
+        sessionId: row.provider_session_id,
+        timestamp: latest.highWaterIso,
+      });
       if (/^Processing/i.test(latest?.status || '')) status = 'in_progress';
       else if (latest?.outputText && status === 'in_progress') status = 'completed';
     } catch {
@@ -194,6 +206,7 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
     model: row.model,
     outputText,
     error: row.error,
+    highWaterMark,
     chain: {
       id: row.chain_id,
       provider: row.provider,
@@ -205,7 +218,7 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
   }));
 }
 
-async function runResponse(opts: { responseId: string; chain: any; prompt: string; isNewChain: boolean; inputState: { text: string; len: number; hash: string }; metric: any }): Promise<void> {
+async function runResponse(opts: { responseId: string; chain: any; prompt: string; isNewChain: boolean; inputState: { text: string; len: number; hash: string }; previousHighWaterIso?: string | null; metric: any }): Promise<void> {
   const provider = getProvider(opts.chain.provider);
   const startMs = Date.now();
   db.insertResponseMetric({
@@ -387,7 +400,7 @@ function sendInput(opts: { responseId: string; chain: any; prompt: string }) {
   };
 }
 
-function responseObject(opts: { id: string; status: string; model: string; outputText?: string | null; error?: string | null; chain: any }) {
+function responseObject(opts: { id: string; status: string; model: string; outputText?: string | null; error?: string | null; chain: any; highWaterMark?: string | null }) {
   const output = opts.outputText ? [{
     type: 'message',
     role: 'assistant',
@@ -407,8 +420,58 @@ function responseObject(opts: { id: string; status: string; model: string; outpu
       provider: opts.chain.provider,
       desktop_title: opts.chain.providerSessionTitle || opts.chain.provider_session_title || opts.chain.title,
       workspace_dir: opts.chain.workspaceDir || opts.chain.workspace_dir,
+      message_high_water_mark: opts.highWaterMark || null,
     },
   };
+}
+
+type HighWaterMark = {
+  provider?: string;
+  sessionId?: string;
+  timestamp: string;
+  mark: string;
+};
+
+function highWaterFromBody(body: Record<string, unknown> | null | undefined): HighWaterMark | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const direct = stringField(body.previous_response_high_water_mark)
+    || stringField(body.message_high_water_mark)
+    || stringField(body.high_water_mark);
+  const metadata = body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
+    ? body.metadata as Record<string, unknown>
+    : null;
+  const nested = metadata
+    ? stringField(metadata.previous_response_high_water_mark)
+      || stringField(metadata.message_high_water_mark)
+      || stringField(metadata.high_water_mark)
+    : undefined;
+  return decodeHighWaterMark(direct || nested);
+}
+
+function encodeHighWaterMark(input: { provider?: string; sessionId?: string; timestamp: string }): string {
+  return Buffer.from(JSON.stringify({
+    v: 1,
+    provider: input.provider || null,
+    session_id: input.sessionId || null,
+    ts: input.timestamp,
+  }), 'utf8').toString('base64url');
+}
+
+function decodeHighWaterMark(mark: string | undefined): HighWaterMark | null {
+  if (!mark) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(mark, 'base64url').toString('utf8')) as Record<string, unknown>;
+    const timestamp = stringField(parsed.ts) || stringField(parsed.timestamp);
+    if (!timestamp || Number.isNaN(Date.parse(timestamp))) return null;
+    return {
+      provider: stringField(parsed.provider),
+      sessionId: stringField(parsed.session_id) || stringField(parsed.sessionId),
+      timestamp,
+      mark,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function inputToText(input: unknown): string {
