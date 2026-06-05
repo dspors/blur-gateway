@@ -49,6 +49,9 @@ Prerequisites:
 - .NET SDK 8 or newer for the Windows shield helpers
 - A local Bridge checkout. The gateway imports Bridge provider and shield modules
   directly, so `BRIDGE_ROOT` must point at the Bridge repo on Windows.
+- A local `blur-db` checkout as a sibling of this repo (`../blur-db`). The gateway
+  depends on it via `file:../blur-db` for its SQLite layer (better-sqlite3,
+  compiled natively) — no external `sqlite3` CLI is required on any platform.
 - Claude Desktop and/or Codex Desktop running on the interactive desktop being
   automated. Do not run the smoke tests from a locked or disconnected desktop.
 
