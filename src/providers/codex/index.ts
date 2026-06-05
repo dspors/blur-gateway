@@ -10,6 +10,8 @@ const codexShield = bridgeRequire('./lib/platform/codex-shield.js') as {
 };
 const codexSessions = bridgeRequire('./lib/providers/codex/sessions.js') as {
   listCodexSessions(opts?: { limit?: number }): Array<{ sessionId: string; title?: string; status?: string }>;
+  getCodexSession(sessionId: string): { status?: string; statusDetail?: string } | null;
+  readTranscript(sessionId: string, opts?: { maxMessages?: number; mode?: string }): Array<{ role?: string; type?: string; content?: string; timestamp?: string }>;
 };
 
 function profile(): Record<string, unknown> {
@@ -69,6 +71,33 @@ export class CodexProvider implements DesktopProvider {
       provider: 'codex',
       status: s.status,
     }));
+  }
+
+  async readLatest(sessionId: string, sinceIso?: string, prompt?: string): Promise<{ status?: string; outputText?: string | null }> {
+    const session = codexSessions.getCodexSession(sessionId);
+    const sinceMs = sinceIso ? Date.parse(sinceIso) : 0;
+    const messages = codexSessions.readTranscript(sessionId, { maxMessages: 100, mode: 'normal' });
+    const startIndex = prompt ? messages.findIndex(message => {
+      if ((message.role || message.type) !== 'user') return false;
+      if (!message.content) return false;
+      if (!message.content.includes(prompt)) return false;
+      if (!sinceMs || !message.timestamp) return true;
+      const ts = Date.parse(message.timestamp);
+      return Number.isFinite(ts) && ts >= sinceMs;
+    }) : -1;
+    const searchSpace = startIndex >= 0 ? messages.slice(startIndex + 1) : messages;
+    const assistantMessages = searchSpace.filter(message => {
+      if ((message.role || message.type) !== 'assistant') return false;
+      if (!message.content) return false;
+      if (!sinceMs || !message.timestamp) return true;
+      const ts = Date.parse(message.timestamp);
+      return Number.isFinite(ts) && ts >= sinceMs;
+    });
+    const assistant = startIndex >= 0 ? assistantMessages[0] : assistantMessages.at(-1);
+    return {
+      status: session?.status,
+      outputText: assistant?.content || session?.statusDetail || null,
+    };
   }
 
   private findByTitle(title: string): ProviderSession | null {

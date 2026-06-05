@@ -94,11 +94,27 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
     sendJson(res, 404, { error: { message: `Unknown response: ${responseId}` } });
     return;
   }
+  let outputText = row.output_text;
+  let status = row.status;
+  if (row.provider_session_id) {
+    try {
+      const input = safeJson(row.input_json);
+      const prompt = input && typeof input === 'object' && !Array.isArray(input)
+        ? inputToText((input as Record<string, unknown>).input)
+        : undefined;
+      const latest = await getProvider(row.provider).readLatest?.(row.provider_session_id, row.created_at, prompt);
+      if (latest?.outputText) outputText = latest.outputText;
+      if (/^Processing/i.test(latest?.status || '')) status = 'in_progress';
+      else if (latest?.outputText && status === 'in_progress') status = 'completed';
+    } catch {
+      // Keep stored response state when provider readback is unavailable.
+    }
+  }
   sendJson(res, 200, responseObject({
     id: row.id,
-    status: row.status,
+    status,
     model: row.model,
-    outputText: row.output_text,
+    outputText,
     error: row.error,
     chain: {
       id: row.chain_id,
@@ -240,4 +256,12 @@ function titleFromMetadata(metadata: unknown): string | null {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
   const record = metadata as Record<string, unknown>;
   return typeof record.title === 'string' && record.title.trim() ? record.title.trim() : null;
+}
+
+function safeJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
