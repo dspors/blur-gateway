@@ -8,6 +8,8 @@ import { id } from '../utils/ids';
 import { readJson, sendJson } from '../utils/http';
 import { createWorkspace, attachFilesToWorkspace } from '../storage/files';
 import { getProvider, providerFromModel } from '../providers';
+import { normalizeReadbackMode } from '../providers/readback';
+import type { BlurMessage, ReadbackMode } from '../types/provider';
 
 const bridgeRequire = createRequire(path.join(config.bridgeRoot, 'package.json'));
 const blurCommand = bridgeRequire('./lib/providers/claude/blur-command.js') as {
@@ -177,18 +179,25 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
   }
   let outputText = row.output_text;
   let status = row.status;
+  const storedInput = safeJson(row.input_json);
+  const readbackMode = readbackModeFromBody(storedInput as Record<string, unknown> | null);
+  let blurMessages: BlurMessage[] | undefined;
   let highWaterMark = highWaterFromBody(safeJson(row.input_json) as Record<string, unknown> | null)?.mark || null;
   if (row.provider_session_id) {
     try {
-      const input = safeJson(row.input_json);
+      const input = storedInput;
       const priorHighWater = input && typeof input === 'object' && !Array.isArray(input)
         ? highWaterFromBody(input as Record<string, unknown>)
         : null;
       const prompt = input && typeof input === 'object' && !Array.isArray(input)
         ? inputToText((input as Record<string, unknown>).input)
         : undefined;
-      const latest = await getProvider(row.provider).readLatest?.(row.provider_session_id, priorHighWater?.timestamp || row.created_at, prompt);
+      const latest = await getProvider(row.provider).readLatest?.(row.provider_session_id, priorHighWater?.timestamp || row.created_at, prompt, {
+        mode: readbackMode,
+        responseId: row.id,
+      });
       if (latest?.outputText) outputText = latest.outputText;
+      if (latest?.messages?.length) blurMessages = latest.messages;
       if (latest?.highWaterIso) highWaterMark = encodeHighWaterMark({
         provider: row.provider,
         sessionId: row.provider_session_id,
@@ -207,6 +216,7 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
     outputText,
     error: row.error,
     highWaterMark,
+    blurMessages,
     chain: {
       id: row.chain_id,
       provider: row.provider,
@@ -400,13 +410,13 @@ function sendInput(opts: { responseId: string; chain: any; prompt: string }) {
   };
 }
 
-function responseObject(opts: { id: string; status: string; model: string; outputText?: string | null; error?: string | null; chain: any; highWaterMark?: string | null }) {
+function responseObject(opts: { id: string; status: string; model: string; outputText?: string | null; error?: string | null; chain: any; highWaterMark?: string | null; blurMessages?: BlurMessage[] }) {
   const output = opts.outputText ? [{
     type: 'message',
     role: 'assistant',
     content: [{ type: 'output_text', text: opts.outputText }],
   }] : [];
-  return {
+  const response: Record<string, unknown> = {
     id: opts.id,
     object: 'response',
     created_at: Math.floor(Date.now() / 1000),
@@ -423,6 +433,8 @@ function responseObject(opts: { id: string; status: string; model: string; outpu
       message_high_water_mark: opts.highWaterMark || null,
     },
   };
+  if (opts.blurMessages) response.blur_messages = opts.blurMessages;
+  return response;
 }
 
 type HighWaterMark = {
@@ -446,6 +458,14 @@ function highWaterFromBody(body: Record<string, unknown> | null | undefined): Hi
       || stringField(metadata.high_water_mark)
     : undefined;
   return decodeHighWaterMark(direct || nested);
+}
+
+function readbackModeFromBody(body: Record<string, unknown> | null | undefined): ReadbackMode {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return 'text';
+  const metadata = body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
+    ? body.metadata as Record<string, unknown>
+    : null;
+  return normalizeReadbackMode(metadata?.readback || body.readback);
 }
 
 function encodeHighWaterMark(input: { provider?: string; sessionId?: string; timestamp: string }): string {

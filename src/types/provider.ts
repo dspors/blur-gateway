@@ -45,6 +45,35 @@ export type DesktopSession = {
   workspaceDir?: string;
 };
 
+export type ReadbackMode = 'text' | 'messages' | 'events';
+
+export type BlurMessage = {
+  id: string;
+  type: string;
+  role: string;
+  text?: string;
+  timestamp?: string;
+  turn_id?: string;
+  provider: ProviderName;
+  provider_session_id?: string | null;
+  response_id?: string;
+  native_type?: string;
+  native_id?: string | null;
+  tool_call_id?: string | null;
+  tool_name?: string | null;
+  arguments?: unknown;
+  result_text?: string | null;
+  revision?: number;
+  final?: boolean;
+};
+
+export type ReadLatestResult = {
+  status?: string;
+  outputText?: string | null;
+  highWaterIso?: string | null;
+  messages?: BlurMessage[];
+};
+
 export interface DesktopProvider {
   name: ProviderName;
   createPreparedSession(input: PreparedSessionInput): Promise<ProviderSession>;
@@ -53,6 +82,6 @@ export interface DesktopProvider {
   rename?(session: SendInput, title: string): Promise<void>;
   archive?(session: SendInput): Promise<void>;
   unarchive?(session: SendInput): Promise<void>;
-  readLatest?(sessionId: string, sinceIso?: string, prompt?: string): Promise<{ status?: string; outputText?: string | null; highWaterIso?: string | null }>;
+  readLatest?(sessionId: string, sinceIso?: string, prompt?: string, opts?: { mode?: ReadbackMode; responseId?: string }): Promise<ReadLatestResult>;
   listSessions(): Promise<DesktopSession[]>;
 }

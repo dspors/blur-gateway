@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { config } from '../../config';
-import type { DesktopProvider, DesktopSession, PreparedSessionInput, ProviderSession, SendInput } from '../../types/provider';
+import type { BlurMessage, DesktopProvider, DesktopSession, PreparedSessionInput, ProviderSession, ReadbackMode, ReadLatestResult, SendInput } from '../../types/provider';
+import { afterSince, latestTimestamp, normalizeMessage, normalizeToolCall } from '../readback';
 
 const bridgeRequire = createRequire(path.join(config.bridgeRoot, 'package.json'));
 const codexShield = bridgeRequire('./lib/platform/codex-shield.js') as {
@@ -11,7 +12,7 @@ const codexShield = bridgeRequire('./lib/platform/codex-shield.js') as {
 const codexSessions = bridgeRequire('./lib/providers/codex/sessions.js') as {
   listCodexSessions(opts?: { limit?: number }): Array<{ sessionId: string; title?: string; status?: string }>;
   getCodexSession(sessionId: string): { status?: string; statusDetail?: string } | null;
-  readTranscript(sessionId: string, opts?: { maxMessages?: number; mode?: string }): Array<{ role?: string; type?: string; content?: string; timestamp?: string }>;
+  readTranscript(sessionId: string, opts?: { maxMessages?: number; mode?: string }): Array<{ role?: string; type?: string; content?: string; timestamp?: string; toolUse?: { name?: string; callId?: string; input?: unknown } }>;
 };
 
 function profile(): Record<string, unknown> {
@@ -73,10 +74,11 @@ export class CodexProvider implements DesktopProvider {
     }));
   }
 
-  async readLatest(sessionId: string, sinceIso?: string, prompt?: string): Promise<{ status?: string; outputText?: string | null; highWaterIso?: string | null }> {
+  async readLatest(sessionId: string, sinceIso?: string, prompt?: string, opts: { mode?: ReadbackMode; responseId?: string } = {}): Promise<ReadLatestResult> {
     const session = codexSessions.getCodexSession(sessionId);
     const sinceMs = sinceIso ? Date.parse(sinceIso) : 0;
-    const messages = codexSessions.readTranscript(sessionId, { maxMessages: 100, mode: 'normal' });
+    const mode = opts.mode || 'text';
+    const messages = codexSessions.readTranscript(sessionId, { maxMessages: 200, mode: mode === 'events' ? 'verbose' : 'normal' });
     const startIndex = prompt ? messages.findIndex(message => {
       if ((message.role || message.type) !== 'user') return false;
       if (!message.content) return false;
@@ -94,10 +96,17 @@ export class CodexProvider implements DesktopProvider {
       return Number.isFinite(ts) && ts > sinceMs;
     });
     const assistant = startIndex >= 0 ? assistantMessages[0] : assistantMessages.at(-1);
+    const richMessages = mode === 'text' ? undefined : normalizeCodexMessages(messages, {
+      mode,
+      sinceMs,
+      providerSessionId: sessionId,
+      responseId: opts.responseId,
+    });
     return {
       status: session?.status,
       outputText: assistant?.content || session?.statusDetail || null,
-      highWaterIso: assistant?.timestamp || null,
+      highWaterIso: richMessages?.length ? latestTimestamp(richMessages) : assistant?.timestamp || null,
+      messages: richMessages,
     };
   }
 
@@ -107,4 +116,42 @@ export class CodexProvider implements DesktopProvider {
     if (!found) return null;
     return { providerSessionId: found.sessionId, providerSessionTitle: found.title || title };
   }
+}
+
+function normalizeCodexMessages(
+  messages: Array<{ role?: string; type?: string; content?: string; timestamp?: string; toolUse?: { name?: string; callId?: string; input?: unknown } }>,
+  opts: { mode: ReadbackMode; sinceMs: number; providerSessionId: string; responseId?: string },
+): BlurMessage[] {
+  const normalized: BlurMessage[] = [];
+  for (const message of messages) {
+    if (!afterSince(message.timestamp, opts.sinceMs)) continue;
+    const role = message.role || message.type || '';
+    if (role === 'user' || role === 'assistant') {
+      const item = normalizeMessage({
+        provider: 'codex',
+        providerSessionId: opts.providerSessionId,
+        responseId: opts.responseId,
+        role,
+        text: message.content || '',
+        timestamp: message.timestamp || null,
+        nativeType: `codex:${message.type || role}`,
+      });
+      if (item) normalized.push(item);
+      continue;
+    }
+    if (opts.mode === 'events' && message.toolUse) {
+      normalized.push(normalizeToolCall({
+        provider: 'codex',
+        providerSessionId: opts.providerSessionId,
+        responseId: opts.responseId,
+        timestamp: message.timestamp || null,
+        nativeType: 'codex:tool_activity',
+        toolCallId: message.toolUse.callId || null,
+        toolName: message.toolUse.name || null,
+        args: message.toolUse.input,
+        text: message.content || null,
+      }));
+    }
+  }
+  return normalized.sort((a, b) => Date.parse(a.timestamp || '') - Date.parse(b.timestamp || ''));
 }

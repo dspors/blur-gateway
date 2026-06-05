@@ -1,7 +1,8 @@
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { config } from '../../config';
-import type { DesktopProvider, DesktopSession, PreparedSessionInput, ProviderSession, SendInput, SpawnInput, SpawnResult } from '../../types/provider';
+import type { BlurMessage, DesktopProvider, DesktopSession, PreparedSessionInput, ProviderSession, ReadbackMode, ReadLatestResult, SendInput, SpawnInput, SpawnResult } from '../../types/provider';
+import { afterSince, latestTimestamp, normalizeMessage, normalizeToolCall, normalizeToolResult } from '../readback';
 
 const bridgeRequire = createRequire(path.join(config.bridgeRoot, 'package.json'));
 const claudeShield = bridgeRequire('./lib/platform/claude-shield.js') as {
@@ -22,7 +23,7 @@ const claudeSessions = bridgeRequire('./lib/core/sessions.js') as {
     lastActivityAt?: string | number | null;
     modifiedAt?: string | number | null;
   }>;
-  readSession(jsonlPath: string, opts?: { maxMessages?: number }): Promise<Array<{ role?: string; type?: string; content?: unknown; timestamp?: string }>>;
+  readSession(jsonlPath: string, opts?: { maxMessages?: number }): Promise<Array<{ uuid?: string; parentUuid?: string | null; role?: string; type?: string; content?: unknown; timestamp?: string; toolUse?: ClaudeToolUse | ClaudeToolUse[] | null }>>;
   readSessionHealth(jsonlPath: string): Promise<{ status?: string; message?: string; detail?: string }>;
 };
 const claudeArchive = bridgeRequire('./lib/providers/claude/archive-flow.js') as {
@@ -129,11 +130,12 @@ export class ClaudeProvider implements DesktopProvider {
       }));
   }
 
-  async readLatest(sessionId: string, sinceIso?: string, prompt?: string): Promise<{ status?: string; outputText?: string | null; highWaterIso?: string | null }> {
+  async readLatest(sessionId: string, sinceIso?: string, prompt?: string, opts: { mode?: ReadbackMode; responseId?: string } = {}): Promise<ReadLatestResult> {
     const session = findSessionById(sessionId);
     if (!session?.jsonlPath) return { outputText: null, highWaterIso: null };
 
     const sinceMs = sinceIso ? Date.parse(sinceIso) : 0;
+    const mode = opts.mode || 'text';
     const messages = await claudeSessions.readSession(session.jsonlPath, { maxMessages: 200 });
     const health = await claudeSessions.readSessionHealth(session.jsonlPath).catch(() => null);
     const startIndex = prompt ? messages.findIndex(message => {
@@ -156,10 +158,17 @@ export class ClaudeProvider implements DesktopProvider {
       return Number.isFinite(ts) && ts > sinceMs;
     });
     const assistant = startIndex >= 0 ? assistantMessages[0] : assistantMessages.at(-1);
+    const richMessages = mode === 'text' ? undefined : normalizeClaudeMessages(messages, {
+      mode,
+      sinceMs,
+      providerSessionId: sessionId,
+      responseId: opts.responseId,
+    });
     return {
       status: health?.status || health?.message,
       outputText: assistant ? contentToText(assistant.content) : health?.detail || null,
-      highWaterIso: assistant?.timestamp || null,
+      highWaterIso: richMessages?.length ? latestTimestamp(richMessages) : assistant?.timestamp || null,
+      messages: richMessages,
     };
   }
 
@@ -181,6 +190,63 @@ export class ClaudeProvider implements DesktopProvider {
     }
     return { providerSessionId: null, providerSessionTitle: title };
   }
+}
+
+type ClaudeToolUse = { name?: string; toolName?: string; callId?: string; id?: string; input?: unknown };
+
+function normalizeClaudeMessages(
+  messages: Array<{ uuid?: string; parentUuid?: string | null; role?: string; type?: string; content?: unknown; timestamp?: string; toolUse?: ClaudeToolUse | ClaudeToolUse[] | null }>,
+  opts: { mode: ReadbackMode; sinceMs: number; providerSessionId: string; responseId?: string },
+): BlurMessage[] {
+  const normalized: BlurMessage[] = [];
+  for (const message of messages) {
+    if (!afterSince(message.timestamp, opts.sinceMs)) continue;
+    const role = message.role || message.type || '';
+    if (role === 'user' || role === 'assistant') {
+      const item = normalizeMessage({
+        provider: 'claude',
+        providerSessionId: opts.providerSessionId,
+        responseId: opts.responseId,
+        role,
+        text: contentToText(message.content),
+        timestamp: message.timestamp || null,
+        nativeType: `claude:${message.type || role}`,
+        nativeId: message.uuid || null,
+        turnId: message.parentUuid || message.uuid || null,
+      });
+      if (item) normalized.push(item);
+    }
+    if (opts.mode === 'events' && message.toolUse) {
+      const uses = Array.isArray(message.toolUse) ? message.toolUse : [message.toolUse];
+      uses.forEach((toolUse, index) => {
+        normalized.push(normalizeToolCall({
+          provider: 'claude',
+          providerSessionId: opts.providerSessionId,
+          responseId: opts.responseId,
+          timestamp: message.timestamp || null,
+          nativeType: 'claude:tool_use',
+          nativeId: message.uuid ? `${message.uuid}:${index}` : null,
+          turnId: message.parentUuid || message.uuid || null,
+          toolCallId: toolUse.callId || toolUse.id || (message.uuid ? `${message.uuid}:${index}` : null),
+          toolName: toolUse.name || toolUse.toolName || null,
+          args: toolUse.input,
+        }));
+      });
+    }
+    if (opts.mode === 'events' && role === 'tool') {
+      normalized.push(normalizeToolResult({
+        provider: 'claude',
+        providerSessionId: opts.providerSessionId,
+        responseId: opts.responseId,
+        timestamp: message.timestamp || null,
+        nativeType: `claude:${message.type || role}`,
+        nativeId: message.uuid || null,
+        turnId: message.parentUuid || message.uuid || null,
+        resultText: contentToText(message.content),
+      }));
+    }
+  }
+  return normalized.sort((a, b) => Date.parse(a.timestamp || '') - Date.parse(b.timestamp || ''));
 }
 
 function snapshotSessionIds(): Set<string> {
