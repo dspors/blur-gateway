@@ -7,7 +7,8 @@ import { afterSince, latestTimestamp, normalizeMessage, normalizeToolCall, times
 const bridgeRequire = createRequire(path.join(config.bridgeRoot, 'package.json'));
 const codexShield = bridgeRequire('./lib/platform/codex-shield.js') as {
   send(app: Record<string, unknown>, query: string, text: string, opts?: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
-  createPreparedSession(app: Record<string, unknown>, opts: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
+  sendToThread?(app: Record<string, unknown>, sessionId: string, text: string, opts?: Record<string, unknown>): Promise<{ success: boolean; error?: string; sessionId?: string; title?: string; outputText?: string | null }>;
+  createPreparedSession(app: Record<string, unknown>, opts: Record<string, unknown>): Promise<{ success: boolean; error?: string; sessionId?: string; title?: string; outputText?: string | null }>;
 };
 const codexSessions = bridgeRequire('./lib/providers/codex/sessions.js') as {
   listCodexSessions(opts?: { limit?: number }): Array<{ sessionId: string; title?: string; status?: string }>;
@@ -43,6 +44,12 @@ export class CodexProvider implements DesktopProvider {
       timeoutSeconds: 60,
     });
     if (!result.success) throw new Error(result.error || 'Codex prepared-session automation failed');
+    if (result.sessionId) {
+      return {
+        providerSessionId: result.sessionId,
+        providerSessionTitle: result.title || input.title,
+      };
+    }
     return this.findByTitle(input.title) || {
       providerSessionId: null,
       providerSessionTitle: input.title,
@@ -50,7 +57,12 @@ export class CodexProvider implements DesktopProvider {
   }
 
   async send(input: SendInput): Promise<void> {
-    const result = await codexShield.send(profile(), input.providerSessionTitle, input.prompt, {
+    const result = input.providerSessionId && codexShield.sendToThread
+      ? await codexShield.sendToThread(profile(), input.providerSessionId, input.prompt, {
+        timeoutSeconds: 45,
+        cwd: input.workspaceDir,
+      })
+      : await codexShield.send(profile(), input.providerSessionTitle, input.prompt, {
       submit: true,
       timeoutSeconds: 45,
     });
