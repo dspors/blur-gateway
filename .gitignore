@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+
+# Runtime data; default location is ~/.blur-gateway, but keep local overrides out too.
+.blur-gateway/
+gateway.sqlite*

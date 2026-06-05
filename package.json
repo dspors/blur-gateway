@@ -1,0 +1,17 @@
+{
+  "name": "blur-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Responses-style local gateway backed by desktop AI sessions.",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "dev": "npm run build && node dist/server.js",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "typescript": "^5.9.0"
+  }
+}
