@@ -153,6 +153,10 @@ export class Sqlite {
     this.exec(`update chains set archived = 1, updated_at = ${sqlString(new Date().toISOString())} where id = ${sqlString(chainId)};`);
   }
 
+  unarchiveChain(chainId: string): void {
+    this.exec(`update chains set archived = 0, updated_at = ${sqlString(new Date().toISOString())} where id = ${sqlString(chainId)};`);
+  }
+
   getChain(chainId: string): any | null {
     return this.json(`select * from chains where id = ${sqlString(chainId)} limit 1`)[0] || null;
   }

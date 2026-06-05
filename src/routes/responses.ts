@@ -1,16 +1,33 @@
 import crypto from 'node:crypto';
+import path from 'node:path';
+import { createRequire } from 'node:module';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { config } from '../config';
 import { db } from '../db/sqlite';
 import { id } from '../utils/ids';
 import { readJson, sendJson } from '../utils/http';
 import { createWorkspace, attachFilesToWorkspace } from '../storage/files';
 import { getProvider, providerFromModel } from '../providers';
 
+const bridgeRequire = createRequire(path.join(config.bridgeRoot, 'package.json'));
+const blurCommand = bridgeRequire('./lib/providers/claude/blur-command.js') as {
+  BLUR_COMMANDS: unknown[];
+  ENVELOPE_CONTRACT: unknown;
+  buildBlurEnvelope(command: string, result?: { payload?: unknown; error?: { code: string; message: string } }, meta?: Record<string, unknown>): unknown;
+  runBlurCommand(args: { text: string; cliSessionId: string | null; host: string | null }): Promise<unknown>;
+};
+const blurSpawn = bridgeRequire('./lib/providers/claude/spawn-flow.js') as {
+  parseBlurSpawnArgs(text: string): { model?: string; title?: string; prompt?: string; error?: string };
+};
+const claudeSessions = bridgeRequire('./lib/core/sessions.js') as {
+  listSessions(opts?: { limit?: number; provider?: string }): Array<{ sessionId: string; cliSessionId?: string | null; jsonlPath?: string | null }>;
+};
+
 export async function createResponse(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await readJson(req);
-  const model = stringField(body.model) || 'codex-desktop';
+  let model = stringField(body.model) || 'codex-desktop';
   const previousResponseId = stringField(body.previous_response_id);
-  const provider = providerFromModel(model);
+  let provider = providerFromModel(model);
   const requestContext = (req as any).blurGateway as Record<string, unknown> | undefined;
   if (requestContext) requestContext.provider = provider.name;
   let responseId: string;
@@ -37,6 +54,34 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
     if (!chain) {
       sendJson(res, 500, { error: { message: `Response chain missing for ${previousResponseId}` } });
       return;
+    }
+    provider = getProvider(chain.provider);
+    model = stringField(body.model) || chain.model || model;
+    if (isBlurSpawn(normalizedInput)) {
+      const parsed = blurSpawn.parseBlurSpawnArgs(normalizedInput);
+      if (parsed.error) {
+        sendJson(res, 400, { error: { message: parsed.error } });
+        return;
+      }
+      const parentChain = chain;
+      responseId = id(provider.name);
+      const workspaceDir = createWorkspace(responseId);
+      const title = parsed.title || titleFromMetadata(body.metadata) || responseId;
+      chain = {
+        id: responseId,
+        provider: parentChain.provider,
+        model: parsed.model || parentChain.model || model,
+        title,
+        workspaceDir,
+        providerSessionId: null,
+        providerSessionTitle: title,
+        archived: false,
+        createdAt: now,
+        updatedAt: now,
+        spawnParent: parentChain,
+      };
+      db.insertChain(chain);
+      isNewChain = true;
     }
   } else {
     responseId = id(provider.name);
@@ -178,6 +223,89 @@ async function runResponse(opts: { responseId: string; chain: any; prompt: strin
   });
 
   try {
+    if (opts.prompt.startsWith('/blur.spawn')) {
+      const parsed = blurSpawn.parseBlurSpawnArgs(opts.prompt);
+      if (parsed.error) throw new Error(parsed.error);
+      const parent = opts.chain.spawnParent;
+      if (!parent) throw new Error('/blur.spawn requires previous_response_id so the parent session is known');
+      if (!provider.spawn) throw new Error(`${provider.name} does not support /blur.spawn`);
+      const session = await provider.spawn({
+        parentSessionId: parent.provider_session_id || parent.providerSessionId,
+        parentSessionTitle: parent.provider_session_title || parent.providerSessionTitle || parent.title,
+        responseId: opts.responseId,
+        title: parsed.title || opts.chain.title,
+        model: parsed.model || opts.chain.model,
+        prompt: parsed.prompt || null,
+      });
+      db.updateChainSession(opts.chain.id, session.providerSessionId, session.providerSessionTitle);
+      db.updateChainInputState(opts.chain.id, opts.inputState);
+      db.updateResponse(opts.responseId, {
+        status: 'completed',
+        outputText: parsed.prompt ? null : JSON.stringify(buildEnvelope('blur.spawn', {
+          success: true,
+          sessionId: session.providerSessionId,
+          title: session.providerSessionTitle,
+          model: parsed.model || null,
+          forkedFrom: session.forkedFrom || null,
+          steps: session.steps || [],
+          elapsedMs: session.elapsedMs || null,
+        })),
+      });
+      db.updateResponseMetric(opts.metric.id, {
+        completedAt: new Date().toISOString(),
+        automationStatus: 'completed',
+        automationDurationMs: Date.now() - startMs,
+        finalStatus: 'completed',
+      });
+      return;
+    }
+
+    if (opts.prompt.startsWith('/blur.help') || opts.prompt.startsWith('/blur.describe')) {
+      db.updateResponse(opts.responseId, { status: 'completed', outputText: JSON.stringify(buildEnvelope('blur.help', { envelope: blurCommand.ENVELOPE_CONTRACT, commands: blurCommand.BLUR_COMMANDS }), null, 2) });
+      db.updateResponseMetric(opts.metric.id, {
+        completedAt: new Date().toISOString(),
+        automationStatus: 'completed',
+        automationDurationMs: Date.now() - startMs,
+        finalStatus: 'completed',
+      });
+      return;
+    }
+
+    if (opts.prompt.startsWith('/blur.archive') || opts.prompt.startsWith('/blur.unarchive')) {
+      const archive = opts.prompt.startsWith('/blur.archive');
+      if (archive) {
+        if (provider.archive) await provider.archive(sendInput(opts));
+        db.archiveChain(opts.chain.id);
+      } else {
+        if (provider.unarchive) await provider.unarchive(sendInput(opts));
+        db.unarchiveChain(opts.chain.id);
+      }
+      db.updateResponse(opts.responseId, { status: 'completed', outputText: archive ? 'Archived.' : 'Unarchived.' });
+      db.updateResponseMetric(opts.metric.id, {
+        completedAt: new Date().toISOString(),
+        automationStatus: 'completed',
+        automationDurationMs: Date.now() - startMs,
+        finalStatus: 'completed',
+      });
+      return;
+    }
+
+    if (opts.prompt.startsWith('/blur.Task')) {
+      const envelope = await runTaskCommand(opts);
+      db.updateResponse(opts.responseId, { status: 'completed', outputText: JSON.stringify(envelope, null, 2) });
+      db.updateResponseMetric(opts.metric.id, {
+        completedAt: new Date().toISOString(),
+        automationStatus: 'completed',
+        automationDurationMs: Date.now() - startMs,
+        finalStatus: 'completed',
+      });
+      return;
+    }
+
+    if (opts.prompt.startsWith('/blur.prompt')) {
+      opts.prompt = opts.prompt.replace(/^\s*\/blur\.prompt\s?/, '');
+    }
+
     if (opts.prompt.startsWith('/blur.archive')) {
       if (provider.archive) {
         await provider.archive(sendInput(opts));
@@ -342,6 +470,33 @@ function safeJson(value: string): unknown {
   } catch {
     return null;
   }
+}
+
+function isBlurSpawn(text: string): boolean {
+  return /^\s*\/blur\.spawn\b/.test(text);
+}
+
+function buildEnvelope(command: string, payload: unknown): unknown {
+  return blurCommand.buildBlurEnvelope(command, { payload }, {
+    startedAtMs: Date.now(),
+    host: 'blur-gateway',
+  });
+}
+
+async function runTaskCommand(opts: { chain: any; prompt: string }): Promise<unknown> {
+  if (opts.chain.provider !== 'claude') {
+    return blurCommand.buildBlurEnvelope('blur.Task', {
+      error: { code: 'unsupported_provider', message: 'Task commands are currently supported for Claude sessions only' },
+    }, { host: 'blur-gateway' });
+  }
+  const providerSessionId = opts.chain.provider_session_id || opts.chain.providerSessionId;
+  const session = claudeSessions.listSessions({ limit: 1000, provider: 'claude' }).find(s => s.sessionId === providerSessionId);
+  const cliSessionId = session?.cliSessionId || (session?.jsonlPath ? path.basename(session.jsonlPath, '.jsonl') : null);
+  return blurCommand.runBlurCommand({
+    text: opts.prompt,
+    cliSessionId,
+    host: 'blur-gateway',
+  });
 }
 
 function normalizeInput(text: string): string {

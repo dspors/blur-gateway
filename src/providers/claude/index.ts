@@ -1,13 +1,14 @@
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { config } from '../../config';
-import type { DesktopProvider, DesktopSession, PreparedSessionInput, ProviderSession, SendInput } from '../../types/provider';
+import type { DesktopProvider, DesktopSession, PreparedSessionInput, ProviderSession, SendInput, SpawnInput, SpawnResult } from '../../types/provider';
 
 const bridgeRequire = createRequire(path.join(config.bridgeRoot, 'package.json'));
 const claudeShield = bridgeRequire('./lib/platform/claude-shield.js') as {
   createSession(text: string, opts?: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
   send(query: string, text: string, opts?: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
   renameCurrent(title: string, opts?: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
+  spawnFromParent(query: string, opts?: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
 };
 const claudeSessions = bridgeRequire('./lib/core/sessions.js') as {
   listSessions(opts?: { limit?: number; provider?: string }): Array<{
@@ -55,6 +56,21 @@ export class ClaudeProvider implements DesktopProvider {
     if (!result.success) throw new Error(result.error || 'Claude send automation failed');
   }
 
+  async spawn(input: SpawnInput): Promise<SpawnResult> {
+    const before = snapshotSessionIds();
+    const result = await claudeShield.spawnFromParent(input.parentSessionTitle, {
+      renameTitle: input.title || undefined,
+      promptAfter: input.prompt || undefined,
+      timeoutSeconds: DEFAULT_TIMEOUT_SECONDS,
+    });
+    if (!result.success) throw new Error(result.error || 'Claude spawn automation failed');
+    const session = await this.findCreatedSession(input.title || '', before);
+    return {
+      ...session,
+      forkedFrom: input.parentSessionId,
+    };
+  }
+
   async rename(input: SendInput, title: string): Promise<void> {
     await this.send({ ...input, prompt: `/rename ${title}` });
   }
@@ -66,6 +82,15 @@ export class ClaudeProvider implements DesktopProvider {
       reqId: `blur-gateway-${input.responseId}`,
     });
     if (!result.success) throw new Error(result.error || 'Claude archive failed');
+  }
+
+  async unarchive(input: SendInput): Promise<void> {
+    const sessionId = input.providerSessionId || input.responseId;
+    const result = await claudeArchive.setArchived(sessionId, false, {
+      sessions: claudeSessions,
+      reqId: `blur-gateway-${input.responseId}`,
+    });
+    if (!result.success) throw new Error(result.error || 'Claude unarchive failed');
   }
 
   async listSessions(): Promise<DesktopSession[]> {
