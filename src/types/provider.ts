@@ -88,6 +88,6 @@ export interface DesktopProvider {
   rename?(session: SendInput, title: string): Promise<void>;
   archive?(session: SendInput): Promise<void>;
   unarchive?(session: SendInput): Promise<void>;
-  readLatest?(sessionId: string, sinceIso?: string, prompt?: string, opts?: { mode?: ReadbackMode; responseId?: string }): Promise<ReadLatestResult>;
+  readLatest?(sessionId: string, sinceIso?: string, prompt?: string, opts?: { mode?: ReadbackMode; responseId?: string; responseCreatedAtIso?: string }): Promise<ReadLatestResult>;
   listSessions(): Promise<DesktopSession[]>;
 }

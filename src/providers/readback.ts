@@ -134,6 +134,27 @@ export function afterSince(timestamp: string | null | undefined, sinceMs: number
   return Number.isFinite(ts) && ts > sinceMs;
 }
 
+export function timestampAfterSinceOrFallback(input: {
+  timestamp?: string | null;
+  sinceMs: number;
+  fallbackBaseMs: number;
+  offset: number;
+}): string | null {
+  const ts = input.timestamp ? Date.parse(input.timestamp) : NaN;
+  if (Number.isFinite(ts) && (!input.sinceMs || ts > input.sinceMs)) {
+    return new Date(ts).toISOString();
+  }
+
+  const baseMs = Number.isFinite(input.fallbackBaseMs) && input.fallbackBaseMs > 0
+    ? input.fallbackBaseMs
+    : input.sinceMs;
+  if (!Number.isFinite(baseMs) || baseMs <= 0) return null;
+
+  const fallbackMs = baseMs + Math.max(0, input.offset) + 1;
+  if (input.sinceMs && fallbackMs <= input.sinceMs) return null;
+  return new Date(fallbackMs).toISOString();
+}
+
 function fallbackTurnId(timestamp: string | null | undefined): string | undefined {
   if (!timestamp) return undefined;
   return `turn_${crypto.createHash('sha256').update(timestamp).digest('hex').slice(0, 16)}`;

@@ -8,6 +8,7 @@ const {
   normalizeReadbackMode,
   normalizeToolCall,
   normalizeToolResult,
+  timestampAfterSinceOrFallback,
 } = require('../dist/providers/readback.js');
 
 test('normalizes readback modes with text as the default', () => {
@@ -94,4 +95,32 @@ test('high-water helpers use strict timestamp ordering', () => {
   const since = Date.parse('2026-06-05T12:01:00.000Z');
   assert.equal(afterSince('2026-06-05T12:01:00.000Z', since), false);
   assert.equal(afterSince('2026-06-05T12:01:00.001Z', since), true);
+});
+
+test('timestamp fallback emits parseable one-shot timestamps for invalid or early provider rows', () => {
+  const created = Date.parse('2026-06-05T12:00:00.000Z');
+  assert.equal(timestampAfterSinceOrFallback({
+    timestamp: 'not-a-date',
+    sinceMs: created,
+    fallbackBaseMs: created,
+    offset: 0,
+  }), '2026-06-05T12:00:00.001Z');
+  assert.equal(timestampAfterSinceOrFallback({
+    timestamp: '2026-06-05T11:59:59.000Z',
+    sinceMs: created,
+    fallbackBaseMs: created,
+    offset: 1,
+  }), '2026-06-05T12:00:00.002Z');
+  assert.equal(timestampAfterSinceOrFallback({
+    timestamp: '2026-06-05T12:00:00.003Z',
+    sinceMs: created,
+    fallbackBaseMs: created,
+    offset: 2,
+  }), '2026-06-05T12:00:00.003Z');
+  assert.equal(timestampAfterSinceOrFallback({
+    timestamp: 'not-a-date',
+    sinceMs: Date.parse('2026-06-05T12:00:00.002Z'),
+    fallbackBaseMs: created,
+    offset: 1,
+  }), null);
 });

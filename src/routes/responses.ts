@@ -203,6 +203,7 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
       const latest = await getProvider(row.provider).readLatest?.(row.provider_session_id, priorHighWater?.timestamp || row.created_at, prompt, {
         mode: readbackMode,
         responseId: row.id,
+        responseCreatedAtIso: row.created_at,
       });
       if (latest?.outputText) outputText = latest.outputText;
       if (latest?.messages?.length) blurMessages = latest.messages;

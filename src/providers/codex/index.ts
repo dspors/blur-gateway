@@ -2,7 +2,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { config } from '../../config';
 import type { BlurMessage, DesktopProvider, DesktopSession, PreparedSessionInput, ProviderSession, ReadbackMode, ReadLatestResult, SendInput } from '../../types/provider';
-import { afterSince, latestTimestamp, normalizeMessage, normalizeToolCall } from '../readback';
+import { afterSince, latestTimestamp, normalizeMessage, normalizeToolCall, timestampAfterSinceOrFallback } from '../readback';
 
 const bridgeRequire = createRequire(path.join(config.bridgeRoot, 'package.json'));
 const codexShield = bridgeRequire('./lib/platform/codex-shield.js') as {
@@ -74,9 +74,10 @@ export class CodexProvider implements DesktopProvider {
     }));
   }
 
-  async readLatest(sessionId: string, sinceIso?: string, prompt?: string, opts: { mode?: ReadbackMode; responseId?: string } = {}): Promise<ReadLatestResult> {
+  async readLatest(sessionId: string, sinceIso?: string, prompt?: string, opts: { mode?: ReadbackMode; responseId?: string; responseCreatedAtIso?: string } = {}): Promise<ReadLatestResult> {
     const session = codexSessions.getCodexSession(sessionId);
     const sinceMs = sinceIso ? Date.parse(sinceIso) : 0;
+    const fallbackBaseMs = Date.parse(opts.responseCreatedAtIso || '') || sinceMs || 0;
     const mode = opts.mode || 'text';
     const messages = codexSessions.readTranscript(sessionId, { maxMessages: 200, mode: mode === 'events' ? 'verbose' : 'normal' });
     const startIndex = prompt ? messages.findIndex(message => {
@@ -99,6 +100,7 @@ export class CodexProvider implements DesktopProvider {
     const richMessages = mode === 'text' ? undefined : normalizeCodexMessages(messages, {
       mode,
       sinceMs,
+      fallbackBaseMs,
       providerSessionId: sessionId,
       responseId: opts.responseId,
     });
@@ -120,12 +122,19 @@ export class CodexProvider implements DesktopProvider {
 
 function normalizeCodexMessages(
   messages: Array<{ role?: string; type?: string; content?: string; timestamp?: string; toolUse?: { name?: string; callId?: string; input?: unknown } }>,
-  opts: { mode: ReadbackMode; sinceMs: number; providerSessionId: string; responseId?: string },
+  opts: { mode: ReadbackMode; sinceMs: number; fallbackBaseMs: number; providerSessionId: string; responseId?: string },
 ): BlurMessage[] {
   const normalized: BlurMessage[] = [];
-  for (const message of messages) {
-    if (!afterSince(message.timestamp, opts.sinceMs)) continue;
+  for (const [index, message] of messages.entries()) {
+    const timestamp = timestampAfterSinceOrFallback({
+      timestamp: message.timestamp,
+      sinceMs: opts.sinceMs,
+      fallbackBaseMs: opts.fallbackBaseMs,
+      offset: index,
+    });
+    if (!timestamp) continue;
     const role = message.role || message.type || '';
+    const nativeId = `codex:${index}:${message.type || role || 'message'}`;
     if (role === 'user' || role === 'assistant') {
       const item = normalizeMessage({
         provider: 'codex',
@@ -133,8 +142,9 @@ function normalizeCodexMessages(
         responseId: opts.responseId,
         role,
         text: message.content || '',
-        timestamp: message.timestamp || null,
+        timestamp,
         nativeType: `codex:${message.type || role}`,
+        nativeId,
       });
       if (item) normalized.push(item);
       continue;
@@ -144,8 +154,9 @@ function normalizeCodexMessages(
         provider: 'codex',
         providerSessionId: opts.providerSessionId,
         responseId: opts.responseId,
-        timestamp: message.timestamp || null,
+        timestamp,
         nativeType: 'codex:tool_activity',
+        nativeId,
         toolCallId: message.toolUse.callId || null,
         toolName: message.toolUse.name || null,
         args: message.toolUse.input,
