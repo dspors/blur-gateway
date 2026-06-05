@@ -139,12 +139,19 @@ export class ClaudeProvider implements DesktopProvider {
   }
 
   private async findCreatedSession(title: string, beforeIds: Set<string>): Promise<ProviderSession> {
+    // Only accept a STABLE bridge session id (local_<uuid>). A freshly created
+    // session briefly surfaces under a transient bare-uuid id before Claude
+    // promotes it to its canonical local_ id; capturing that transient id breaks
+    // later id-based operations (notably archive, which resolves by sessionId).
+    // Poll until the stable id appears, then fall through to null.
+    const stable = (id: string | null | undefined): id is string =>
+      typeof id === 'string' && id.startsWith('local_');
     for (let i = 0; i < 20; i++) {
       const sessions = claudeSessions.listSessions({ limit: 500, provider: 'claude' });
-      const byTitle = sessions.find(s => s.title === title);
+      const byTitle = sessions.find(s => s.title === title && stable(s.sessionId));
       if (byTitle) return { providerSessionId: byTitle.sessionId, providerSessionTitle: title };
-      const fresh = sessions.find(s => !beforeIds.has(s.sessionId));
-      if (fresh?.sessionId) return { providerSessionId: fresh.sessionId, providerSessionTitle: fresh.title || title };
+      const fresh = sessions.find(s => stable(s.sessionId) && !beforeIds.has(s.sessionId));
+      if (fresh) return { providerSessionId: fresh.sessionId, providerSessionTitle: fresh.title || title };
       await new Promise(resolve => setTimeout(resolve, 500));
     }
     return { providerSessionId: null, providerSessionTitle: title };
