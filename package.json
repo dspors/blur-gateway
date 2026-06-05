@@ -10,6 +10,9 @@
     "dev": "npm run build && node dist/server.js",
     "check": "tsc -p tsconfig.json --noEmit"
   },
+  "dependencies": {
+    "blur-db": "file:../blur-db"
+  },
   "devDependencies": {
     "@types/node": "^24.10.0",
     "typescript": "^5.9.0"

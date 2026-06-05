@@ -1,6 +1,6 @@
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { openSqlite, type DatabaseT } from 'blur-db';
 import { config } from '../config';
 
 function sqlString(value: string | null | undefined): string {
@@ -9,7 +9,11 @@ function sqlString(value: string | null | undefined): string {
 }
 
 export class Sqlite {
-  constructor(public readonly dbPath: string = config.dbPath) {}
+  private readonly db: DatabaseT;
+
+  constructor(public readonly dbPath: string = config.dbPath) {
+    this.db = openSqlite({ dbPath });
+  }
 
   init(): void {
     fs.mkdirSync(path.dirname(this.dbPath), { recursive: true });
@@ -108,15 +112,11 @@ export class Sqlite {
   }
 
   exec(sql: string): void {
-    execFileSync('sqlite3', [this.dbPath], { input: sql, encoding: 'utf8' });
+    this.db.exec(sql);
   }
 
   json<T = Record<string, unknown>>(sql: string): T[] {
-    const out = execFileSync('sqlite3', ['-readonly', '-json', this.dbPath, sql], {
-      encoding: 'utf8',
-      timeout: 10000,
-    }).trim();
-    return out ? JSON.parse(out) as T[] : [];
+    return this.db.prepare(sql).all() as T[];
   }
 
   ensureColumn(table: string, column: string, type: string): void {
