@@ -48,6 +48,22 @@ Supported `metadata.readback` values:
 | `messages` | Conversation timeline for UI or state reconciliation. | Adds `blur_messages` with normalized user and assistant messages. |
 | `events` | Diagnostic/full workflow timeline. | Adds `blur_messages` with user/assistant messages, tool calls/results, status updates, usage/counter snapshots, and subagent lifecycle events where available. |
 
+The modes are progressive supersets:
+
+```text
+text ⊂ messages ⊂ events
+```
+
+Every mode returns the normal Responses-compatible JSON envelope. The difference
+is how much structured readback the gateway adds:
+
+- `text` is text-first. Clients usually read `output_text` and can ignore the
+  rest of the response except `metadata.message_high_water_mark`.
+- `messages` includes everything from `text` and adds structured JSON
+  conversation records in `blur_messages`.
+- `events` includes everything from `messages` and adds structured JSON
+  workflow events in `blur_messages`.
+
 `metadata.include_subagents` controls whether child sessions are expanded into
 the rich readback stream.
 
@@ -82,9 +98,14 @@ Text mode preserves the simplest Responses-style contract:
 In text mode the high-water mark effectively means "last assistant message
 returned to the client."
 
+Text mode is still JSON at the HTTP layer, but its payload is intentionally
+plain-text-oriented: `output_text` is the primary field, and `blur_messages` is
+omitted.
+
 ## Messages mode
 
-Messages mode adds normalized user and assistant messages:
+Messages mode includes the text-mode fields and adds normalized user and
+assistant messages:
 
 ```json
 {
@@ -118,13 +139,14 @@ Messages mode adds normalized user and assistant messages:
 ```
 
 Messages mode is for clients that need a stable chat timeline but do not need
-tool internals.
+tool internals. Clients may still use `output_text` as a convenience summary,
+but `blur_messages` is the authoritative structured timeline for this mode.
 
 ## Events mode
 
-Events mode includes normalized workflow events. It may include all message-mode
-events plus provider status, tool use, usage/counter snapshots, and subagent
-events.
+Events mode includes all message-mode fields and adds normalized workflow
+events. It may include provider status, tool use, usage/counter snapshots, and
+subagent events.
 
 ```json
 {
@@ -169,7 +191,9 @@ events.
 ```
 
 Events mode is for debuggers, workflow engines, timeline UIs, and clients that
-need to understand in-process state.
+need to understand in-process state. Clients may still use `output_text` for a
+plain assistant summary, but `blur_messages` is the authoritative structured
+event stream for this mode.
 
 ## Partial information
 
