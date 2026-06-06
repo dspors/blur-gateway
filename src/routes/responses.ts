@@ -649,7 +649,7 @@ function buildEnvelope(command: string, payload: unknown): unknown {
 }
 
 async function runTaskCommand(opts: { chain: any; prompt: string }): Promise<unknown> {
-  if (opts.chain.provider !== 'claude') {
+  if (opts.chain.provider !== 'claude' && opts.chain.provider !== 'claude-desktop') {
     return blurCommand.buildBlurEnvelope('blur.Task', {
       error: { code: 'unsupported_provider', message: 'Task commands are currently supported for Claude sessions only' },
     }, { host: 'blur-gateway' });

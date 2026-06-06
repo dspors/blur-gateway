@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { config } from '../../config';
-import type { BlurMessage, DesktopProvider, DesktopSession, PreparedSessionInput, ProviderSession, ReadbackMode, ReadLatestResult, SendInput } from '../../types/provider';
+import type { BlurMessage, DesktopProvider, DesktopSession, PreparedSessionInput, ProviderName, ProviderSession, ReadbackMode, ReadLatestResult, SendInput } from '../../types/provider';
 import { afterSince, latestTimestamp, normalizeMessage, normalizeToolCall, timestampAfterSinceOrFallback } from '../readback';
 
 const bridgeRequire = createRequire(path.join(config.bridgeRoot, 'package.json'));
@@ -32,8 +32,16 @@ function profile(): Record<string, unknown> {
   };
 }
 
+type CodexTransport = 'cli' | 'desktop';
+
 export class CodexProvider implements DesktopProvider {
-  name = 'codex' as const;
+  name: ProviderName;
+  private transport: CodexTransport;
+
+  constructor(opts: { name: ProviderName; transport: CodexTransport }) {
+    this.name = opts.name;
+    this.transport = opts.transport;
+  }
 
   async createPreparedSession(input: PreparedSessionInput): Promise<ProviderSession> {
     const result = await codexShield.createPreparedSession(profile(), {
@@ -42,6 +50,7 @@ export class CodexProvider implements DesktopProvider {
       text: input.prompt,
       submit: true,
       timeoutSeconds: 60,
+      transport: this.transport === 'desktop' ? 'shield' : 'cli',
     });
     if (!result.success) throw new Error(result.error || 'Codex prepared-session automation failed');
     if (result.sessionId) {
@@ -57,7 +66,7 @@ export class CodexProvider implements DesktopProvider {
   }
 
   async send(input: SendInput): Promise<void> {
-    const result = input.providerSessionId && codexShield.sendToThread
+    const result = this.transport === 'cli' && input.providerSessionId && codexShield.sendToThread
       ? await codexShield.sendToThread(profile(), input.providerSessionId, input.prompt, {
         timeoutSeconds: 45,
         cwd: input.workspaceDir,
@@ -81,7 +90,7 @@ export class CodexProvider implements DesktopProvider {
     return codexSessions.listCodexSessions({ limit: 200 }).map(s => ({
       id: s.sessionId,
       title: s.title || s.sessionId,
-      provider: 'codex',
+      provider: this.name,
       status: s.status,
     }));
   }
@@ -114,6 +123,7 @@ export class CodexProvider implements DesktopProvider {
     const assistant = startIndex >= 0 ? assistantMessages[0] : assistantMessages.at(-1);
     const richMessages = mode === 'text' ? undefined : normalizeCodexMessages(messages, {
       mode,
+      provider: this.name,
       sinceMs,
       fallbackBaseMs,
       providerSessionId: sessionId,
@@ -137,7 +147,7 @@ export class CodexProvider implements DesktopProvider {
 
 function normalizeCodexMessages(
   messages: Array<{ role?: string; type?: string; content?: string; timestamp?: string; toolUse?: { name?: string; callId?: string; input?: unknown } }>,
-  opts: { mode: ReadbackMode; sinceMs: number; fallbackBaseMs: number; providerSessionId: string; responseId?: string },
+  opts: { mode: ReadbackMode; provider: ProviderName; sinceMs: number; fallbackBaseMs: number; providerSessionId: string; responseId?: string },
 ): BlurMessage[] {
   const normalized: BlurMessage[] = [];
   for (const [index, message] of messages.entries()) {
@@ -152,7 +162,7 @@ function normalizeCodexMessages(
     const nativeId = `codex:${index}:${message.type || role || 'message'}`;
     if (role === 'user' || role === 'assistant') {
       const item = normalizeMessage({
-        provider: 'codex',
+        provider: opts.provider,
         providerSessionId: opts.providerSessionId,
         responseId: opts.responseId,
         role,
@@ -166,7 +176,7 @@ function normalizeCodexMessages(
     }
     if (opts.mode === 'events' && message.toolUse) {
       normalized.push(normalizeToolCall({
-        provider: 'codex',
+        provider: opts.provider,
         providerSessionId: opts.providerSessionId,
         responseId: opts.responseId,
         timestamp,

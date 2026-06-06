@@ -1,4 +1,4 @@
-export type ProviderName = 'codex' | 'claude';
+export type ProviderName = 'claude' | 'claude-desktop' | 'codex' | 'codex-desktop' | 'codex-cli';
 
 export type PreparedSessionInput = {
   chainId: string;

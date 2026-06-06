@@ -21,15 +21,26 @@ function serializeDesktop(provider: DesktopProvider): DesktopProvider {
   }) as DesktopProvider;
 }
 
+const claudeDesktop = serializeDesktop(new ClaudeProvider({ name: 'claude-desktop' }));
+const codexDesktop = serializeDesktop(new CodexProvider({ name: 'codex-desktop', transport: 'desktop' }));
+const codexCli = new CodexProvider({ name: 'codex-cli', transport: 'cli' });
+
 const providers: Record<ProviderName, DesktopProvider> = {
-  codex: serializeDesktop(new CodexProvider()),
-  claude: serializeDesktop(new ClaudeProvider()),
+  claude: claudeDesktop,
+  'claude-desktop': claudeDesktop,
+  codex: codexCli,
+  'codex-desktop': codexDesktop,
+  'codex-cli': codexCli,
 };
 
 export function providerFromModel(model: string | undefined): DesktopProvider {
   const normalized = (model || 'codex-desktop').toLowerCase();
-  if (normalized.includes('claude')) return providers.claude;
-  return providers.codex;
+  if (normalized.includes('claude')) return providers['claude-desktop'];
+  if (normalized.includes('codex-cli') || normalized.includes('codex_cli')) return providers['codex-cli'];
+  if (normalized.includes('codex-desktop') || normalized.includes('codex_desktop')) return providers['codex-desktop'];
+  if (normalized === 'codex') return providers.codex;
+  if (normalized.startsWith('gpt-5.')) return providers['codex-cli'];
+  return providers['codex-desktop'];
 }
 
 export function getProvider(name: string): DesktopProvider {
@@ -39,5 +50,5 @@ export function getProvider(name: string): DesktopProvider {
 }
 
 export function allProviders(): DesktopProvider[] {
-  return Object.values(providers);
+  return [providers['claude-desktop'], providers['codex-desktop'], providers['codex-cli']];
 }

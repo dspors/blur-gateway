@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { config } from '../../config';
-import type { BlurMessage, DesktopProvider, DesktopSession, PreparedSessionInput, ProviderSession, ReadbackMode, ReadLatestResult, SendInput, SpawnInput, SpawnResult } from '../../types/provider';
+import type { BlurMessage, DesktopProvider, DesktopSession, PreparedSessionInput, ProviderName, ProviderSession, ReadbackMode, ReadLatestResult, SendInput, SpawnInput, SpawnResult } from '../../types/provider';
 import { afterSince, latestTimestamp, normalizeMessage, normalizeToolCall, normalizeToolResult } from '../readback';
 
 const bridgeRequire = createRequire(path.join(config.bridgeRoot, 'package.json'));
@@ -33,7 +33,11 @@ const claudeArchive = bridgeRequire('./lib/providers/claude/archive-flow.js') as
 const DEFAULT_TIMEOUT_SECONDS = 90;
 
 export class ClaudeProvider implements DesktopProvider {
-  name = 'claude' as const;
+  name: ProviderName;
+
+  constructor(opts: { name?: ProviderName } = {}) {
+    this.name = opts.name || 'claude';
+  }
 
   async createPreparedSession(input: PreparedSessionInput): Promise<ProviderSession> {
     const before = snapshotSessionIds();
@@ -124,7 +128,7 @@ export class ClaudeProvider implements DesktopProvider {
       .map(s => ({
         id: s.sessionId,
         title: s.title || s.sessionId,
-        provider: 'claude',
+        provider: this.name,
         status: s.status || undefined,
         workspaceDir: s.cwd || undefined,
       }));
@@ -160,6 +164,7 @@ export class ClaudeProvider implements DesktopProvider {
     const assistant = startIndex >= 0 ? assistantMessages[0] : assistantMessages.at(-1);
     const richMessages = mode === 'text' ? undefined : normalizeClaudeMessages(messages, {
       mode,
+      provider: this.name,
       sinceMs,
       providerSessionId: sessionId,
       responseId: opts.responseId,
@@ -196,7 +201,7 @@ type ClaudeToolUse = { name?: string; toolName?: string; callId?: string; id?: s
 
 function normalizeClaudeMessages(
   messages: Array<{ uuid?: string; parentUuid?: string | null; role?: string; type?: string; content?: unknown; timestamp?: string; toolUse?: ClaudeToolUse | ClaudeToolUse[] | null }>,
-  opts: { mode: ReadbackMode; sinceMs: number; providerSessionId: string; responseId?: string },
+  opts: { mode: ReadbackMode; provider: ProviderName; sinceMs: number; providerSessionId: string; responseId?: string },
 ): BlurMessage[] {
   const normalized: BlurMessage[] = [];
   for (const message of messages) {
@@ -204,7 +209,7 @@ function normalizeClaudeMessages(
     const role = message.role || message.type || '';
     if (role === 'user' || role === 'assistant') {
       const item = normalizeMessage({
-        provider: 'claude',
+        provider: opts.provider,
         providerSessionId: opts.providerSessionId,
         responseId: opts.responseId,
         role,
@@ -220,7 +225,7 @@ function normalizeClaudeMessages(
       const uses = Array.isArray(message.toolUse) ? message.toolUse : [message.toolUse];
       uses.forEach((toolUse, index) => {
         normalized.push(normalizeToolCall({
-          provider: 'claude',
+          provider: opts.provider,
           providerSessionId: opts.providerSessionId,
           responseId: opts.responseId,
           timestamp: message.timestamp || null,
@@ -235,7 +240,7 @@ function normalizeClaudeMessages(
     }
     if (opts.mode === 'events' && role === 'tool') {
       normalized.push(normalizeToolResult({
-        provider: 'claude',
+        provider: opts.provider,
         providerSessionId: opts.providerSessionId,
         responseId: opts.responseId,
         timestamp: message.timestamp || null,
