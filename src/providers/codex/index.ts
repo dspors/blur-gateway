@@ -100,7 +100,10 @@ export class CodexProvider implements DesktopProvider {
       const ts = Date.parse(message.timestamp);
       return Number.isFinite(ts) && ts > sinceMs;
     }) : -1;
-    const searchSpace = startIndex >= 0 ? messages.slice(startIndex + 1) : messages;
+    // If the just-submitted prompt is not visible yet, do not reuse an older
+    // assistant message from the same thread. The caller is polling a new turn.
+    const promptPending = Boolean(prompt) && startIndex < 0;
+    const searchSpace = promptPending ? [] : (startIndex >= 0 ? messages.slice(startIndex + 1) : messages);
     const assistantMessages = searchSpace.filter(message => {
       if ((message.role || message.type) !== 'assistant') return false;
       if (!message.content) return false;
@@ -117,8 +120,8 @@ export class CodexProvider implements DesktopProvider {
       responseId: opts.responseId,
     });
     return {
-      status: session?.status,
-      outputText: assistant?.content || session?.statusDetail || null,
+      status: promptPending ? 'Processing...' : session?.status,
+      outputText: promptPending ? null : (assistant?.content || session?.statusDetail || null),
       highWaterIso: richMessages?.length ? latestTimestamp(richMessages) : assistant?.timestamp || null,
       messages: richMessages,
     };
