@@ -166,6 +166,73 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
   }));
 }
 
+/**
+ * Adopt an EXISTING provider session (created outside the gateway — e.g. a
+ * bridge-forked Claude desktop session `local_<uuid>`) as a gateway response
+ * chain, so it can be driven via /v1/responses going forward WITHOUT creating a
+ * new session. Powers the bridge→gateway Proceedings migration (tkt_6adf9de6 /
+ * tkt_91eba62a): registers a chain bound to the existing `provider_session_id`
+ * and mints a high-water mark at a caller-supplied timestamp — typically the
+ * last turn already recorded in Blur, so subsequent readback delivers only newer
+ * turns (catch-up). Does NOT dispatch a prompt.
+ *
+ * Body: { session_id, provider?='claude', model?, since_timestamp?, metadata? }
+ * Returns: { id (responseId, use as previous_response_id), message_high_water_mark, … }
+ */
+export async function adoptResponse(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const body = await readJson(req);
+  const sessionId = stringField(body.session_id) || stringField(body.provider_session_id);
+  if (!sessionId) {
+    sendJson(res, 400, { error: { message: 'adopt requires session_id (the existing provider session id to bind)' } });
+    return;
+  }
+  const providerName = stringField(body.provider) || 'claude';
+  const provider = getProvider(providerName);
+  const model = stringField(body.model) || providerName;
+  const sinceTimestamp = stringField(body.since_timestamp) || stringField(body.timestamp) || new Date().toISOString();
+  const now = new Date().toISOString();
+  const responseId = id(provider.name);
+  const workspaceDir = createWorkspace(responseId);
+  const title = titleFromMetadata(body.metadata) || sessionId;
+  // Bind the chain to the EXISTING session (provider_session_id set up-front).
+  db.insertChain({
+    id: responseId,
+    provider: provider.name,
+    model,
+    title,
+    workspaceDir,
+    providerSessionId: sessionId,
+    providerSessionTitle: title,
+    archived: false,
+    createdAt: now,
+    updatedAt: now,
+  });
+  // Register a completed response so responseId is a valid previous_response_id.
+  db.upsertResponse({
+    id: responseId,
+    chainId: responseId,
+    previousResponseId: null,
+    status: 'completed',
+    input: { adopt: true, session_id: sessionId, since_timestamp: sinceTimestamp },
+    outputText: null,
+    error: null,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const mark = encodeHighWaterMark({ provider: provider.name, sessionId, timestamp: sinceTimestamp });
+  const ctx = (req as any).blurGateway as Record<string, unknown> | undefined;
+  if (ctx) { ctx.responseId = responseId; ctx.provider = provider.name; }
+  sendJson(res, 200, {
+    id: responseId,
+    object: 'response',
+    status: 'completed',
+    model,
+    adopted_session_id: sessionId,
+    message_high_water_mark: mark,
+    metadata: { message_high_water_mark: mark },
+  });
+}
+
 export async function getResponse(_req: IncomingMessage, res: ServerResponse, responseId: string): Promise<void> {
   const row = db.getResponse(responseId);
   if (!row) {

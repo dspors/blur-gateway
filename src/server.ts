@@ -5,7 +5,7 @@ import { db } from './db/sqlite';
 import { ensureStorage } from './storage/files';
 import { notFound, sendJson } from './utils/http';
 import { id } from './utils/ids';
-import { createResponse, getResponse } from './routes/responses';
+import { createResponse, getResponse, adoptResponse } from './routes/responses';
 import { createFile, getFileContent } from './routes/files';
 import { listDesktopSessions } from './routes/desktop';
 import { getMetrics, listRequests } from './routes/admin';
@@ -52,6 +52,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/health') {
       sendJson(res, 200, { ok: true, service: 'blur-gateway' });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/v1/responses/adopt') {
+      await adoptResponse(req, res);
       return;
     }
 
