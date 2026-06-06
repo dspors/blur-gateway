@@ -257,13 +257,19 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
     ? subagentSpawnEvent(row, storedInput as Record<string, unknown> | null)
     : null;
   let blurMessages: BlurMessage[] | undefined;
-  let highWaterMark = highWaterFromBody(safeJson(row.input_json) as Record<string, unknown> | null)?.mark || null;
+  // The client advances the high-water mark on each poll (sent as the
+  // `high_water_mark` query param) so the readback PAGES FORWARD through a
+  // backlog; fall back to the create-time stored mark on the first poll. Reading
+  // only the stored mark (the old behavior) re-read the same window every poll →
+  // the loop could never drain a >window backlog.
+  const storedMark = storedInput && typeof storedInput === 'object' && !Array.isArray(storedInput)
+    ? highWaterFromBody(storedInput as Record<string, unknown>)
+    : null;
+  const priorHighWater = highWaterFromUrl(requestUrl) ?? storedMark;
+  let highWaterMark = priorHighWater?.mark || null;
   if (row.provider_session_id) {
     try {
       const input = storedInput;
-      const priorHighWater = input && typeof input === 'object' && !Array.isArray(input)
-        ? highWaterFromBody(input as Record<string, unknown>)
-        : null;
       const prompt = input && typeof input === 'object' && !Array.isArray(input)
         ? inputToText((input as Record<string, unknown>).input)
         : undefined;
@@ -279,8 +285,15 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
         sessionId: row.provider_session_id,
         timestamp: latest.highWaterIso,
       });
+      // Complete only when the reply to THIS turn has landed — i.e. the readback
+      // has reached a turn at/after this response's created_at. A catch-up
+      // assistant turn (older than created_at) no longer trips completion, so the
+      // loop keeps paging until the real reply arrives.
+      const repliedToThisTurn = latest?.highWaterIso
+        ? Date.parse(latest.highWaterIso) >= Date.parse(row.created_at)
+        : false;
       if (/^Processing/i.test(latest?.status || '')) status = 'in_progress';
-      else if (latest?.outputText && status === 'in_progress') status = 'completed';
+      else if (latest?.outputText && status === 'in_progress' && repliedToThisTurn) status = 'completed';
     } catch {
       // Keep stored response state when provider readback is unavailable.
     }
@@ -461,8 +474,12 @@ async function runResponse(opts: { responseId: string; chain: any; prompt: strin
     }
 
     db.updateChainInputState(opts.chain.id, opts.inputState);
+    // The injection (send) is done, but the assistant has NOT replied yet. Leave
+    // the RESPONSE in_progress so the poll path (getResponse) completes it only
+    // when the reply to THIS turn lands (readback reaches a turn at/after
+    // created_at) — not on send. The automation METRIC still records success.
     db.updateResponse(opts.responseId, {
-      status: 'completed',
+      status: 'in_progress',
       outputText: null,
     });
     db.updateResponseMetric(opts.metric.id, {
@@ -543,6 +560,20 @@ function highWaterFromBody(body: Record<string, unknown> | null | undefined): Hi
       || stringField(metadata.high_water_mark)
     : undefined;
   return decodeHighWaterMark(direct || nested);
+}
+
+/**
+ * Read the high-water mark from the request URL query (the client sends its
+ * advancing cursor on each poll so the readback pages forward). Checks the
+ * common param spellings.
+ */
+function highWaterFromUrl(url: URL | null): HighWaterMark | null {
+  if (!url) return null;
+  const mark = url.searchParams.get('high_water_mark')
+    || url.searchParams.get('previous_response_high_water_mark')
+    || url.searchParams.get('message_high_water_mark')
+    || undefined;
+  return decodeHighWaterMark(mark || undefined);
 }
 
 function readbackModeFromBody(body: Record<string, unknown> | null | undefined, url?: URL | null): ReadbackMode {
