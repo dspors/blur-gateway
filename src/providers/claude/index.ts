@@ -155,7 +155,14 @@ export class ClaudeProvider implements DesktopProvider {
       const ts = Date.parse(message.timestamp);
       return Number.isFinite(ts) && ts > sinceMs;
     }) : -1;
-    const searchSpace = startIndex >= 0 ? messages.slice(startIndex + 1) : messages;
+    // Match the codex provider (one consistent gateway path): if the just-
+    // submitted prompt is not visible in the drained window yet, do NOT surface
+    // an older assistant reply from the backlog as THIS turn's answer. The rich
+    // backlog messages still flow (richMessages below uses the full window, so
+    // the forward-drain keeps delivering + advancing the mark) — only
+    // outputText/status stay "pending" until the driven reply actually lands.
+    const promptPending = Boolean(prompt) && startIndex < 0;
+    const searchSpace = promptPending ? [] : (startIndex >= 0 ? messages.slice(startIndex + 1) : messages);
     const assistantMessages = searchSpace.filter(message => {
       const role = message.role || message.type;
       if (role !== 'assistant') return false;
@@ -174,8 +181,8 @@ export class ClaudeProvider implements DesktopProvider {
       responseId: opts.responseId,
     });
     return {
-      status: health?.status || health?.message,
-      outputText: assistant ? contentToText(assistant.content) : health?.detail || null,
+      status: promptPending ? 'Processing...' : (health?.status || health?.message),
+      outputText: promptPending ? null : (assistant ? contentToText(assistant.content) : health?.detail || null),
       highWaterIso: richMessages?.length ? latestTimestamp(richMessages) : assistant?.timestamp || null,
       messages: richMessages,
     };
