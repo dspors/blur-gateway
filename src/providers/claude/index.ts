@@ -23,7 +23,7 @@ const claudeSessions = bridgeRequire('./lib/core/sessions.js') as {
     lastActivityAt?: string | number | null;
     modifiedAt?: string | number | null;
   }>;
-  readSession(jsonlPath: string, opts?: { maxMessages?: number }): Promise<Array<{ uuid?: string; parentUuid?: string | null; role?: string; type?: string; content?: unknown; timestamp?: string; toolUse?: ClaudeToolUse | ClaudeToolUse[] | null }>>;
+  readSession(jsonlPath: string, opts?: { maxMessages?: number; afterIso?: string }): Promise<Array<{ uuid?: string; parentUuid?: string | null; role?: string; type?: string; content?: unknown; timestamp?: string; toolUse?: ClaudeToolUse | ClaudeToolUse[] | null }>>;
   readSessionHealth(jsonlPath: string): Promise<{ status?: string; message?: string; detail?: string }>;
 };
 const claudeArchive = bridgeRequire('./lib/providers/claude/archive-flow.js') as {
@@ -140,7 +140,11 @@ export class ClaudeProvider implements DesktopProvider {
 
     const sinceMs = sinceIso ? Date.parse(sinceIso) : 0;
     const mode = opts.mode || 'text';
-    const messages = await claudeSessions.readSession(session.jsonlPath, { maxMessages: 200 });
+    // Forward-drain from the mark (tkt_f76668e4): window to the FIRST 200 turns
+    // AFTER `sinceIso` (oldest-first) so an advancing mark pages a >200 backlog
+    // losslessly, rather than reading the newest-200 tail and post-filtering
+    // (which silently drops the oldest backlog between the mark and tail-200).
+    const messages = await claudeSessions.readSession(session.jsonlPath, { maxMessages: 200, afterIso: sinceIso });
     const health = await claudeSessions.readSessionHealth(session.jsonlPath).catch(() => null);
     const startIndex = prompt ? messages.findIndex(message => {
       const role = message.role || message.type;

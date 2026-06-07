@@ -13,7 +13,7 @@ const codexShield = bridgeRequire('./lib/platform/codex-shield.js') as {
 const codexSessions = bridgeRequire('./lib/providers/codex/sessions.js') as {
   listCodexSessions(opts?: { limit?: number }): Array<{ sessionId: string; title?: string; status?: string }>;
   getCodexSession(sessionId: string): { status?: string; statusDetail?: string } | null;
-  readTranscript(sessionId: string, opts?: { maxMessages?: number; mode?: string }): Array<{ role?: string; type?: string; content?: string; timestamp?: string; toolUse?: { name?: string; callId?: string; input?: unknown } }>;
+  readTranscript(sessionId: string, opts?: { maxMessages?: number; mode?: string; afterIso?: string }): Array<{ role?: string; type?: string; content?: string; timestamp?: string; toolUse?: { name?: string; callId?: string; input?: unknown } }>;
 };
 
 function profile(): Record<string, unknown> {
@@ -100,7 +100,10 @@ export class CodexProvider implements DesktopProvider {
     const sinceMs = sinceIso ? Date.parse(sinceIso) : 0;
     const fallbackBaseMs = Date.parse(opts.responseCreatedAtIso || '') || sinceMs || 0;
     const mode = opts.mode || 'text';
-    const messages = codexSessions.readTranscript(sessionId, { maxMessages: 200, mode: mode === 'events' ? 'verbose' : 'normal' });
+    // Forward-drain from the mark (tkt_f76668e4): FIRST 200 turns AFTER `sinceIso`
+    // (oldest-first) so an advancing mark pages a >200 backlog losslessly instead
+    // of reading the newest-200 tail and post-filtering.
+    const messages = codexSessions.readTranscript(sessionId, { maxMessages: 200, mode: mode === 'events' ? 'verbose' : 'normal', afterIso: sinceIso });
     const startIndex = prompt ? messages.findIndex(message => {
       if ((message.role || message.type) !== 'user') return false;
       if (!message.content) return false;
