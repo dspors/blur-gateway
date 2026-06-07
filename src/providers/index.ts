@@ -1,6 +1,5 @@
 import type { DesktopProvider, ProviderName } from '../types/provider';
 import { CodexProvider } from './codex';
-import { ClaudeProvider } from './claude';
 import { runExclusive } from './desktop-lock';
 
 // HID methods drive the single shared desktop and MUST be serialized end-to-end:
@@ -21,7 +20,7 @@ function serializeDesktop(provider: DesktopProvider): DesktopProvider {
   }) as DesktopProvider;
 }
 
-const claudeDesktop = serializeDesktop(new ClaudeProvider({ name: 'claude-desktop' }));
+const claudeDesktop = createClaudeProvider();
 const codexDesktop = serializeDesktop(new CodexProvider({ name: 'codex-desktop', transport: 'desktop' }));
 const codexCli = new CodexProvider({ name: 'codex-cli', transport: 'cli' });
 
@@ -51,4 +50,26 @@ export function getProvider(name: string): DesktopProvider {
 
 export function allProviders(): DesktopProvider[] {
   return [providers['claude-desktop'], providers['codex-desktop'], providers['codex-cli']];
+}
+
+function createClaudeProvider(): DesktopProvider {
+  try {
+    const { ClaudeProvider } = require('./claude') as typeof import('./claude');
+    return serializeDesktop(new ClaudeProvider({ name: 'claude-desktop' }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return unavailableProvider('claude-desktop', message);
+  }
+}
+
+function unavailableProvider(name: ProviderName, reason: string): DesktopProvider {
+  const fail = async () => {
+    throw new Error(`${name} is unavailable on this host: ${reason}`);
+  };
+  return {
+    name,
+    createPreparedSession: fail,
+    send: fail,
+    listSessions: async () => [],
+  };
 }

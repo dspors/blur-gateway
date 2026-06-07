@@ -11,19 +11,35 @@ import { getProvider, providerFromModel } from '../providers';
 import { eventId, normalizeReadbackMode } from '../providers/readback';
 import type { BlurMessage, ReadbackMode } from '../types/provider';
 
-const bridgeRequire = createRequire(path.join(config.bridgeRoot, 'package.json'));
-const blurCommand = bridgeRequire('./lib/providers/claude/blur-command.js') as {
+type BlurCommandModule = {
   BLUR_COMMANDS: unknown[];
   ENVELOPE_CONTRACT: unknown;
   buildBlurEnvelope(command: string, result?: { payload?: unknown; error?: { code: string; message: string } }, meta?: Record<string, unknown>): unknown;
   runBlurCommand(args: { text: string; cliSessionId: string | null; host: string | null }): Promise<unknown>;
 };
-const blurSpawn = bridgeRequire('./lib/providers/claude/spawn-flow.js') as {
+type BlurSpawnModule = {
   parseBlurSpawnArgs(text: string): { model?: string; title?: string; prompt?: string; error?: string };
 };
-const claudeSessions = bridgeRequire('./lib/core/sessions.js') as {
+type ClaudeSessionsModule = {
   listSessions(opts?: { limit?: number; provider?: string }): Array<{ sessionId: string; cliSessionId?: string | null; jsonlPath?: string | null }>;
 };
+
+const bridgeRequire = createRequire(path.join(config.bridgeRoot, 'package.json'));
+let cachedBlurCommand: BlurCommandModule | null = null;
+let cachedBlurSpawn: BlurSpawnModule | null = null;
+let cachedClaudeSessions: ClaudeSessionsModule | null = null;
+
+function getBlurCommand(): BlurCommandModule {
+  return cachedBlurCommand ||= bridgeRequire('./lib/providers/claude/blur-command.js') as BlurCommandModule;
+}
+
+function getBlurSpawn(): BlurSpawnModule {
+  return cachedBlurSpawn ||= bridgeRequire('./lib/providers/claude/spawn-flow.js') as BlurSpawnModule;
+}
+
+function getClaudeSessions(): ClaudeSessionsModule {
+  return cachedClaudeSessions ||= bridgeRequire('./lib/core/sessions.js') as ClaudeSessionsModule;
+}
 
 export async function createResponse(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await readJson(req);
@@ -61,7 +77,7 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
     provider = getProvider(chain.provider);
     model = stringField(body.model) || chain.model || model;
     if (isBlurSpawn(normalizedInput)) {
-      const parsed = blurSpawn.parseBlurSpawnArgs(normalizedInput);
+      const parsed = getBlurSpawn().parseBlurSpawnArgs(normalizedInput);
       if (parsed.error) {
         sendJson(res, 400, { error: { message: parsed.error } });
         return;
@@ -345,7 +361,7 @@ async function runResponse(opts: { responseId: string; chain: any; prompt: strin
 
   try {
     if (opts.prompt.startsWith('/blur.spawn')) {
-      const parsed = blurSpawn.parseBlurSpawnArgs(opts.prompt);
+      const parsed = getBlurSpawn().parseBlurSpawnArgs(opts.prompt);
       if (parsed.error) throw new Error(parsed.error);
       const parent = opts.chain.spawnParent;
       if (!parent) throw new Error('/blur.spawn requires previous_response_id so the parent session is known');
@@ -382,6 +398,7 @@ async function runResponse(opts: { responseId: string; chain: any; prompt: strin
     }
 
     if (opts.prompt.startsWith('/blur.help') || opts.prompt.startsWith('/blur.describe')) {
+      const blurCommand = getBlurCommand();
       db.updateResponse(opts.responseId, { status: 'completed', outputText: JSON.stringify(buildEnvelope('blur.help', { envelope: blurCommand.ENVELOPE_CONTRACT, commands: blurCommand.BLUR_COMMANDS }), null, 2) });
       db.updateResponseMetric(opts.metric.id, {
         completedAt: new Date().toISOString(),
@@ -606,7 +623,7 @@ function requestUrlFromIncoming(req: IncomingMessage): URL | null {
 
 function subagentSpawnEvent(row: any, input: Record<string, unknown> | null): BlurMessage {
   const prompt = input && typeof input === 'object' ? inputToText(input.input) : '';
-  const parsed = blurSpawn.parseBlurSpawnArgs(normalizeInput(prompt));
+  const parsed = getBlurSpawn().parseBlurSpawnArgs(normalizeInput(prompt));
   const timestamp = row.updated_at || row.created_at || new Date().toISOString();
   return {
     id: eventId([row.provider, row.id, row.provider_session_id, timestamp, 'subagent_spawn']),
@@ -740,7 +757,7 @@ function isBlurSpawn(text: string): boolean {
 }
 
 function buildEnvelope(command: string, payload: unknown): unknown {
-  return blurCommand.buildBlurEnvelope(command, { payload }, {
+  return getBlurCommand().buildBlurEnvelope(command, { payload }, {
     startedAtMs: Date.now(),
     host: 'blur-gateway',
   });
@@ -748,14 +765,14 @@ function buildEnvelope(command: string, payload: unknown): unknown {
 
 async function runTaskCommand(opts: { chain: any; prompt: string }): Promise<unknown> {
   if (opts.chain.provider !== 'claude' && opts.chain.provider !== 'claude-desktop') {
-    return blurCommand.buildBlurEnvelope('blur.Task', {
+    return getBlurCommand().buildBlurEnvelope('blur.Task', {
       error: { code: 'unsupported_provider', message: 'Task commands are currently supported for Claude sessions only' },
     }, { host: 'blur-gateway' });
   }
   const providerSessionId = opts.chain.provider_session_id || opts.chain.providerSessionId;
-  const session = claudeSessions.listSessions({ limit: 1000, provider: 'claude' }).find(s => s.sessionId === providerSessionId);
+  const session = getClaudeSessions().listSessions({ limit: 1000, provider: 'claude' }).find(s => s.sessionId === providerSessionId);
   const cliSessionId = session?.cliSessionId || (session?.jsonlPath ? path.basename(session.jsonlPath, '.jsonl') : null);
-  return blurCommand.runBlurCommand({
+  return getBlurCommand().runBlurCommand({
     text: opts.prompt,
     cliSessionId,
     host: 'blur-gateway',
