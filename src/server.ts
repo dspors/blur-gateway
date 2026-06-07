@@ -1,9 +1,10 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import path from 'node:path';
 import { config } from './config';
 import { db } from './db/sqlite';
 import { ensureStorage } from './storage/files';
-import { notFound, sendJson } from './utils/http';
+import { notFound, sendBuffer, sendJson } from './utils/http';
 import { id } from './utils/ids';
 import { createResponse, getResponse, adoptResponse } from './routes/responses';
 import { createFile, getFileContent } from './routes/files';
@@ -22,6 +23,12 @@ const server = http.createServer(async (req, res) => {
   const requestContext: Record<string, unknown> = { requestId };
   (req as any).blurGateway = requestContext;
   res.setHeader('x-request-id', requestId);
+  setCorsHeaders(res);
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
   res.once('finish', () => {
     try {
       const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
@@ -49,6 +56,11 @@ const server = http.createServer(async (req, res) => {
   });
   try {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+
+    if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/chat')) {
+      sendChatPage(res);
+      return;
+    }
 
     if (req.method === 'GET' && url.pathname === '/health') {
       sendJson(res, 200, { ok: true, service: 'blur-gateway' });
@@ -113,4 +125,15 @@ server.listen(config.port, () => {
 function headerString(value: string | string[] | undefined): string | null {
   if (Array.isArray(value)) return value.join(', ');
   return value || null;
+}
+
+function sendChatPage(res: http.ServerResponse): void {
+  const pagePath = path.join(process.cwd(), 'public', 'chat.html');
+  sendBuffer(res, 200, fs.readFileSync(pagePath), 'text/html; charset=utf-8');
+}
+
+function setCorsHeaders(res: http.ServerResponse): void {
+  res.setHeader('access-control-allow-origin', '*');
+  res.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
+  res.setHeader('access-control-allow-headers', 'content-type,authorization,x-request-id');
 }

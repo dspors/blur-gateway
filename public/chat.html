@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blur Gateway Chat</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --bg: #f6f5f2;
+      --panel: #ffffff;
+      --panel-2: #ece9e3;
+      --text: #242424;
+      --muted: #6b675f;
+      --line: #d7d2c8;
+      --accent: #1b6a68;
+      --accent-2: #124c4a;
+      --danger: #a53b3b;
+      --code: #202326;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #171819;
+        --panel: #202224;
+        --panel-2: #2a2d2f;
+        --text: #eeeeec;
+        --muted: #a9a49a;
+        --line: #393b3e;
+        --accent: #58b8b2;
+        --accent-2: #7bd0cb;
+        --danger: #e07878;
+        --code: #111315;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+    }
+    button, input, select, textarea {
+      font: inherit;
+    }
+    button, select, input, textarea {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--text);
+    }
+    button {
+      min-height: 36px;
+      padding: 0 12px;
+      cursor: pointer;
+    }
+    button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: .55;
+    }
+    label {
+      display: block;
+      margin: 0 0 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+    input, select {
+      width: 100%;
+      min-height: 36px;
+      padding: 0 10px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 92px;
+      resize: vertical;
+      padding: 10px;
+      line-height: 1.42;
+    }
+    .app {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 100vh;
+    }
+    header {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) minmax(180px, 280px) auto auto;
+      gap: 12px;
+      align-items: end;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    main {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      min-height: 0;
+    }
+    aside {
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+      overflow: auto;
+    }
+    .sidebar-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .session-list {
+      display: grid;
+      gap: 1px;
+      background: var(--line);
+    }
+    .session {
+      display: grid;
+      gap: 3px;
+      padding: 10px 12px;
+      border: 0;
+      border-radius: 0;
+      background: var(--panel);
+      text-align: left;
+    }
+    .session.active {
+      background: color-mix(in srgb, var(--accent) 15%, var(--panel));
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }
+    .session-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 650;
+    }
+    .session-meta {
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .chat {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr);
+      min-width: 0;
+      min-height: 0;
+      overflow: hidden;
+    }
+    .messages {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 0;
+      overflow: auto;
+      padding: 18px;
+    }
+    .empty {
+      margin: auto;
+      color: var(--muted);
+      text-align: center;
+    }
+    .bubble {
+      max-width: min(860px, 86%);
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .bubble.user {
+      align-self: flex-end;
+      background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+    }
+    .bubble.assistant {
+      align-self: flex-start;
+    }
+    .bubble.status {
+      align-self: center;
+      max-width: 90%;
+      color: var(--muted);
+      background: var(--panel-2);
+      font-size: 12px;
+      white-space: normal;
+    }
+    .bubble.error {
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+    footer {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      padding: 12px 16px 16px;
+      border-top: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .composer-actions {
+      display: grid;
+      align-content: end;
+      gap: 8px;
+      min-width: 128px;
+    }
+    .status-line {
+      color: var(--muted);
+      font-size: 12px;
+      min-height: 16px;
+    }
+    .hidden {
+      display: none;
+    }
+    @media (max-width: 820px) {
+      header {
+        grid-template-columns: 1fr;
+      }
+      main {
+        grid-template-columns: 1fr;
+      }
+      aside {
+        max-height: 220px;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      footer {
+        grid-template-columns: 1fr;
+      }
+      .composer-actions {
+        grid-template-columns: 1fr 1fr;
+      }
+      .bubble {
+        max-width: 96%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div>
+        <label for="endpoint">Endpoint</label>
+        <input id="endpoint" list="endpoint-options" autocomplete="off">
+        <datalist id="endpoint-options"></datalist>
+      </div>
+      <div>
+        <label for="model">Model</label>
+        <select id="model">
+          <option value="codex-cli">codex-cli</option>
+          <option value="codex-desktop">codex-desktop</option>
+          <option value="claude-desktop">claude-desktop</option>
+        </select>
+      </div>
+      <button id="connect">Refresh Sessions</button>
+      <button id="new-session">New Session</button>
+    </header>
+    <main>
+      <aside>
+        <div class="sidebar-head">
+          <strong>Sessions</strong>
+          <span id="session-count" class="status-line"></span>
+        </div>
+        <div id="sessions" class="session-list"></div>
+      </aside>
+      <section class="chat">
+        <div id="messages" class="messages">
+          <div class="empty">Select a session or start a new one.</div>
+        </div>
+      </section>
+    </main>
+    <footer>
+      <div>
+        <label for="prompt">Prompt</label>
+        <textarea id="prompt" placeholder="Type a message"></textarea>
+        <div id="status" class="status-line"></div>
+      </div>
+      <div class="composer-actions">
+        <button id="send" class="primary">Send</button>
+        <button id="stop" disabled>Stop Poll</button>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    const state = {
+      endpoint: '',
+      sessions: [],
+      selected: null,
+      highWaterMark: null,
+      polling: null,
+      messages: [],
+    };
+
+    const els = {
+      endpoint: document.getElementById('endpoint'),
+      endpointOptions: document.getElementById('endpoint-options'),
+      model: document.getElementById('model'),
+      connect: document.getElementById('connect'),
+      newSession: document.getElementById('new-session'),
+      sessions: document.getElementById('sessions'),
+      sessionCount: document.getElementById('session-count'),
+      messages: document.getElementById('messages'),
+      prompt: document.getElementById('prompt'),
+      status: document.getElementById('status'),
+      send: document.getElementById('send'),
+      stop: document.getElementById('stop'),
+    };
+
+    const defaultEndpoints = [
+      window.location.origin,
+      'http://100.75.53.74:3480',
+      'http://100.111.143.111:3480',
+    ];
+
+    init();
+
+    function init() {
+      const saved = JSON.parse(localStorage.getItem('blurGatewayChat') || '{}');
+      const endpoint = saved.endpoint || window.location.origin;
+      els.endpoint.value = endpoint;
+      els.model.value = saved.model || 'codex-cli';
+      for (const value of Array.from(new Set([endpoint, ...defaultEndpoints]))) {
+        const option = document.createElement('option');
+        option.value = value;
+        els.endpointOptions.appendChild(option);
+      }
+      els.connect.addEventListener('click', refreshSessions);
+      els.newSession.addEventListener('click', selectNewSession);
+      els.send.addEventListener('click', sendPrompt);
+      els.stop.addEventListener('click', stopPolling);
+      els.prompt.addEventListener('keydown', event => {
+        if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') sendPrompt();
+      });
+      refreshSessions();
+    }
+
+    async function refreshSessions() {
+      savePrefs();
+      stopPolling();
+      state.endpoint = cleanEndpoint(els.endpoint.value);
+      setStatus('Loading sessions...');
+      try {
+        const data = await api('/v1/desktop/sessions');
+        state.sessions = data.data || [];
+        renderSessions();
+        setStatus(`Connected to ${state.endpoint}`);
+      } catch (err) {
+        state.sessions = [];
+        renderSessions();
+        setStatus(err.message, true);
+      }
+    }
+
+    function renderSessions() {
+      els.sessions.textContent = '';
+      els.sessionCount.textContent = `${state.sessions.length}`;
+      if (!state.sessions.length) {
+        const empty = document.createElement('div');
+        empty.className = 'session-meta';
+        empty.style.padding = '12px';
+        empty.textContent = 'No gateway chains yet.';
+        els.sessions.appendChild(empty);
+        return;
+      }
+      for (const session of state.sessions) {
+        const button = document.createElement('button');
+        button.className = `session${state.selected?.id === session.id ? ' active' : ''}`;
+        button.type = 'button';
+        button.addEventListener('click', () => selectSession(session));
+        const title = document.createElement('div');
+        title.className = 'session-title';
+        title.textContent = session.title || session.provider_session_title || session.id;
+        const meta = document.createElement('div');
+        meta.className = 'session-meta';
+        meta.textContent = `${session.provider} · ${session.id}`;
+        button.append(title, meta);
+        els.sessions.appendChild(button);
+      }
+    }
+
+    function selectSession(session) {
+      stopPolling();
+      state.selected = session;
+      state.highWaterMark = null;
+      state.messages = [];
+      els.model.value = session.model || session.provider || els.model.value;
+      renderSessions();
+      renderMessages();
+      setStatus(`Selected ${session.title || session.id}`);
+      pollResponse(session.id);
+    }
+
+    function selectNewSession() {
+      stopPolling();
+      state.selected = null;
+      state.highWaterMark = null;
+      state.messages = [];
+      renderSessions();
+      renderMessages();
+      setStatus('New session selected');
+      els.prompt.focus();
+    }
+
+    async function sendPrompt() {
+      const input = els.prompt.value.trim();
+      if (!input) return;
+      savePrefs();
+      stopPolling();
+      const previousResponseId = state.selected?.id || null;
+      appendMessage({ role: 'user', text: input });
+      els.prompt.value = '';
+      setBusy(true);
+      setStatus(previousResponseId ? 'Sending follow-up...' : 'Creating session...');
+      try {
+        const body = {
+          model: els.model.value,
+          input,
+          metadata: { title: titleForPrompt(input), readback: 'messages' },
+        };
+        if (previousResponseId) body.previous_response_id = previousResponseId;
+        if (state.highWaterMark) body.previous_response_high_water_mark = state.highWaterMark;
+        const response = await api('/v1/responses', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        state.selected = {
+          id: response.id,
+          title: response.metadata?.desktop_title || response.id,
+          provider: response.metadata?.provider || els.model.value,
+          model: response.model,
+        };
+        state.highWaterMark = response.metadata?.message_high_water_mark || state.highWaterMark;
+        renderSessions();
+        pollResponse(response.id);
+      } catch (err) {
+        appendMessage({ role: 'error', text: err.message });
+        setStatus(err.message, true);
+        setBusy(false);
+      }
+    }
+
+    async function pollResponse(id) {
+      stopPolling();
+      setBusy(true);
+      let delay = 700;
+      const tick = async () => {
+        try {
+          const params = new URLSearchParams({ readback: 'messages' });
+          if (state.highWaterMark) params.set('high_water_mark', state.highWaterMark);
+          const response = await api(`/v1/responses/${encodeURIComponent(id)}?${params}`);
+          state.selected = {
+            id: response.id,
+            title: response.metadata?.desktop_title || state.selected?.title || response.id,
+            provider: response.metadata?.provider || state.selected?.provider,
+            model: response.model,
+          };
+          state.highWaterMark = response.metadata?.message_high_water_mark || state.highWaterMark;
+          mergeResponse(response);
+          renderSessions();
+          setStatus(`${response.status}${state.highWaterMark ? ' · high-water advanced' : ''}`);
+          if (response.status === 'completed' || response.status === 'failed') {
+            setBusy(false);
+            if (response.status === 'failed') appendMessage({ role: 'error', text: response.error?.message || 'Response failed' });
+            await refreshSessionsQuietly();
+            return;
+          }
+          delay = Math.min(delay + 300, 2200);
+          state.polling = window.setTimeout(tick, delay);
+        } catch (err) {
+          appendMessage({ role: 'error', text: err.message });
+          setStatus(err.message, true);
+          setBusy(false);
+        }
+      };
+      tick();
+    }
+
+    async function refreshSessionsQuietly() {
+      try {
+        const data = await api('/v1/desktop/sessions');
+        state.sessions = data.data || [];
+        renderSessions();
+      } catch {
+      }
+    }
+
+    function mergeResponse(response) {
+      const messages = Array.isArray(response.blur_messages) && response.blur_messages.length
+        ? response.blur_messages
+        : response.output_text
+          ? [{ role: 'assistant', text: response.output_text, id: `${response.id}:output` }]
+          : [];
+      for (const message of messages) {
+        const role = message.role || message.type || 'assistant';
+        if (role !== 'user' && role !== 'assistant') continue;
+        const text = message.text || contentToText(message.content);
+        if (role === 'user' && isHiddenProviderUserMessage(text)) continue;
+        if (!text) continue;
+        appendMessage({ id: message.id, role, text, timestamp: message.timestamp });
+      }
+    }
+
+    function appendMessage(message) {
+      const key = message.id || `${message.role}:${message.text}`;
+      if (state.messages.some(existing => (existing.id || `${existing.role}:${existing.text}`) === key)) return;
+      if (message.role === 'user' && state.messages.some(existing => existing.role === 'user' && existing.text === message.text)) return;
+      state.messages.push({ ...message, id: key });
+      renderMessages();
+    }
+
+    function isHiddenProviderUserMessage(text) {
+      return !text || /^<environment_context>[\s\S]*<\/environment_context>$/.test(text.trim());
+    }
+
+    function renderMessages() {
+      els.messages.textContent = '';
+      if (!state.messages.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = state.selected ? 'No messages returned yet.' : 'Select a session or start a new one.';
+        els.messages.appendChild(empty);
+        return;
+      }
+      for (const message of state.messages) {
+        const bubble = document.createElement('div');
+        bubble.className = `bubble ${message.role === 'user' ? 'user' : message.role === 'error' ? 'error' : 'assistant'}`;
+        bubble.textContent = message.text;
+        els.messages.appendChild(bubble);
+      }
+      els.messages.scrollTop = els.messages.scrollHeight;
+    }
+
+    function contentToText(content) {
+      if (typeof content === 'string') return content;
+      if (!Array.isArray(content)) return '';
+      return content.map(part => {
+        if (typeof part === 'string') return part;
+        if (part && typeof part === 'object') return part.text || part.content || '';
+        return '';
+      }).filter(Boolean).join('\n');
+    }
+
+    async function api(path, options = {}) {
+      const endpoint = cleanEndpoint(els.endpoint.value);
+      const response = await fetch(`${endpoint}${path}`, options);
+      const text = await response.text();
+      const data = text ? JSON.parse(text) : null;
+      if (!response.ok) throw new Error(data?.error?.message || `${response.status} ${response.statusText}`);
+      return data;
+    }
+
+    function setBusy(busy) {
+      els.send.disabled = busy;
+      els.stop.disabled = !busy;
+    }
+
+    function stopPolling() {
+      if (state.polling) window.clearTimeout(state.polling);
+      state.polling = null;
+      setBusy(false);
+    }
+
+    function setStatus(text, isError = false) {
+      els.status.textContent = text;
+      els.status.style.color = isError ? 'var(--danger)' : 'var(--muted)';
+    }
+
+    function savePrefs() {
+      localStorage.setItem('blurGatewayChat', JSON.stringify({
+        endpoint: cleanEndpoint(els.endpoint.value),
+        model: els.model.value,
+      }));
+    }
+
+    function cleanEndpoint(value) {
+      return (value || window.location.origin).trim().replace(/\/$/, '');
+    }
+
+    function titleForPrompt(input) {
+      return input.replace(/\s+/g, ' ').slice(0, 48) || 'Gateway Chat';
+    }
+  </script>
+</body>
+</html>
