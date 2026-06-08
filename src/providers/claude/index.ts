@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { config } from '../../config';
 import type { BlurMessage, DesktopProvider, DesktopSession, PreparedSessionInput, ProviderName, ProviderSession, ReadbackMode, ReadLatestResult, SendInput, SpawnInput, SpawnResult } from '../../types/provider';
@@ -131,6 +132,7 @@ export class ClaudeProvider implements DesktopProvider {
         provider: this.name,
         status: s.status || undefined,
         workspaceDir: s.cwd || undefined,
+        jsonlUpdatedAt: jsonlUpdatedAt(s.jsonlPath, s.modifiedAt || s.lastActivityAt),
       }));
   }
 
@@ -271,6 +273,23 @@ function snapshotSessionIds(): Set<string> {
 
 function findSessionById(sessionId: string) {
   return claudeSessions.listSessions({ limit: 500, provider: 'claude' }).find(s => s.sessionId === sessionId);
+}
+
+function jsonlUpdatedAt(jsonlPath?: string | null, fallback?: string | number | null): string | null {
+  if (jsonlPath) {
+    try {
+      return fs.statSync(jsonlPath).mtime.toISOString();
+    } catch {
+    }
+  }
+  if (typeof fallback === 'number' && Number.isFinite(fallback) && fallback > 0) {
+    return new Date(fallback).toISOString();
+  }
+  if (typeof fallback === 'string') {
+    const ms = Date.parse(fallback);
+    if (Number.isFinite(ms)) return new Date(ms).toISOString();
+  }
+  return null;
 }
 
 function contentToText(content: unknown): string {

@@ -43,6 +43,7 @@ export type DesktopSession = {
   provider: ProviderName;
   status?: string;
   workspaceDir?: string;
+  jsonlUpdatedAt?: string | null;
 };
 
 export type ReadbackMode = 'text' | 'messages' | 'events';

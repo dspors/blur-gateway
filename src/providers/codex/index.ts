@@ -1,4 +1,5 @@
 import path from 'node:path';
+import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { config } from '../../config';
 import type { BlurMessage, DesktopProvider, DesktopSession, PreparedSessionInput, ProviderName, ProviderSession, ReadbackMode, ReadLatestResult, SendInput } from '../../types/provider';
@@ -11,8 +12,8 @@ const codexShield = bridgeRequire('./lib/platform/codex-shield.js') as {
   createPreparedSession(app: Record<string, unknown>, opts: Record<string, unknown>): Promise<{ success: boolean; error?: string; sessionId?: string; title?: string; outputText?: string | null }>;
 };
 const codexSessions = bridgeRequire('./lib/providers/codex/sessions.js') as {
-  listCodexSessions(opts?: { limit?: number }): Array<{ sessionId: string; title?: string; status?: string }>;
-  getCodexSession(sessionId: string): { status?: string; statusDetail?: string } | null;
+  listCodexSessions(opts?: { limit?: number }): Array<{ sessionId: string; title?: string; status?: string; jsonlPath?: string | null; modifiedAt?: string | number | null; lastActivityAt?: string | number | null }>;
+  getCodexSession(sessionId: string): { status?: string; statusDetail?: string; jsonlPath?: string | null; modifiedAt?: string | number | null; lastActivityAt?: string | number | null } | null;
   readTranscript(sessionId: string, opts?: { maxMessages?: number; mode?: string; afterIso?: string }): Array<{ role?: string; type?: string; content?: string; timestamp?: string; toolUse?: { name?: string; callId?: string; input?: unknown } }>;
 };
 
@@ -92,6 +93,7 @@ export class CodexProvider implements DesktopProvider {
       title: s.title || s.sessionId,
       provider: this.name,
       status: s.status,
+      jsonlUpdatedAt: jsonlUpdatedAt(s.jsonlPath, s.modifiedAt || s.lastActivityAt),
     }));
   }
 
@@ -146,6 +148,23 @@ export class CodexProvider implements DesktopProvider {
     if (!found) return null;
     return { providerSessionId: found.sessionId, providerSessionTitle: found.title || title };
   }
+}
+
+function jsonlUpdatedAt(jsonlPath?: string | null, fallback?: string | number | null): string | null {
+  if (jsonlPath) {
+    try {
+      return fs.statSync(jsonlPath).mtime.toISOString();
+    } catch {
+    }
+  }
+  if (typeof fallback === 'number' && Number.isFinite(fallback) && fallback > 0) {
+    return new Date(fallback).toISOString();
+  }
+  if (typeof fallback === 'string') {
+    const ms = Date.parse(fallback);
+    if (Number.isFinite(ms)) return new Date(ms).toISOString();
+  }
+  return null;
 }
 
 function normalizeCodexMessages(

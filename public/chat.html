@@ -148,6 +148,13 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .session-state {
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .chat {
       display: grid;
       grid-template-rows: minmax(0, 1fr);
@@ -381,7 +388,10 @@
         const meta = document.createElement('div');
         meta.className = 'session-meta';
         meta.textContent = `${session.provider} · ${session.id}`;
-        button.append(title, meta);
+        const sessionState = document.createElement('div');
+        sessionState.className = 'session-state';
+        sessionState.textContent = `${sessionStatus(session)} · ${jsonlAge(session.jsonl_updated_at)}`;
+        button.append(title, meta, sessionState);
         els.sessions.appendChild(button);
       }
     }
@@ -574,6 +584,29 @@
       els.status.style.color = isError ? 'var(--danger)' : 'var(--muted)';
     }
 
+    function sessionStatus(session) {
+      const raw = String(session.provider_status || session.status || '').trim();
+      if (!raw) return 'Idle';
+      if (/processing|in_progress/i.test(raw)) return 'Processing';
+      if (/idle/i.test(raw)) return 'Idle';
+      return raw;
+    }
+
+    function jsonlAge(value) {
+      const ms = value ? Date.parse(value) : NaN;
+      if (!Number.isFinite(ms)) return 'JSONL unknown';
+      const ageMs = Math.max(0, Date.now() - ms);
+      const seconds = Math.floor(ageMs / 1000);
+      if (seconds < 10) return 'JSONL just now';
+      if (seconds < 60) return `JSONL ${seconds}s ago`;
+      const minutes = Math.floor(seconds / 60);
+      if (minutes < 60) return `JSONL ${minutes}m ago`;
+      const hours = Math.floor(minutes / 60);
+      if (hours < 48) return `JSONL ${hours}h ago`;
+      const days = Math.floor(hours / 24);
+      return `JSONL ${days}d ago`;
+    }
+
     function savePrefs() {
       localStorage.setItem('blurGatewayChat', JSON.stringify({
         endpoint: cleanEndpoint(els.endpoint.value),
@@ -588,6 +621,10 @@
     function titleForPrompt(input) {
       return input.replace(/\s+/g, ' ').slice(0, 48) || 'Gateway Chat';
     }
+
+    window.setInterval(() => {
+      if (state.sessions.length) renderSessions();
+    }, 30000);
   </script>
 </body>
 </html>
