@@ -281,7 +281,8 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
   const storedMark = storedInput && typeof storedInput === 'object' && !Array.isArray(storedInput)
     ? highWaterFromBody(storedInput as Record<string, unknown>)
     : null;
-  const priorHighWater = highWaterFromUrl(requestUrl) ?? storedMark;
+  const urlHighWater = highWaterFromUrl(requestUrl);
+  const priorHighWater = urlHighWater ?? storedMark;
   let highWaterMark = priorHighWater?.mark || null;
   if (row.provider_session_id) {
     try {
@@ -289,11 +290,18 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
       const prompt = input && typeof input === 'object' && !Array.isArray(input)
         ? inputToText((input as Record<string, unknown>).input)
         : undefined;
-      const latest = await getProvider(row.provider).readLatest?.(row.provider_session_id, priorHighWater?.timestamp || row.created_at, prompt, {
+      let latest = await getProvider(row.provider).readLatest?.(row.provider_session_id, priorHighWater?.timestamp || row.created_at, prompt, {
         mode: readbackMode,
         responseId: row.id,
         responseCreatedAtIso: row.created_at,
       });
+      if (urlHighWater && row.status === 'in_progress' && !latest?.outputText && !latest?.messages?.length) {
+        latest = await getProvider(row.provider).readLatest?.(row.provider_session_id, storedMark?.timestamp || row.created_at, prompt, {
+          mode: readbackMode,
+          responseId: row.id,
+          responseCreatedAtIso: row.created_at,
+        });
+      }
       if (latest?.outputText) outputText = latest.outputText;
       if (latest?.messages?.length) blurMessages = latest.messages;
       if (latest?.highWaterIso) highWaterMark = encodeHighWaterMark({
@@ -308,8 +316,11 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
       const repliedToThisTurn = latest?.highWaterIso
         ? Date.parse(latest.highWaterIso) >= Date.parse(row.created_at)
         : false;
-      if (/^Processing/i.test(latest?.status || '')) status = 'in_progress';
+      if (status !== 'completed' && /^Processing/i.test(latest?.status || '')) status = 'in_progress';
       else if (latest?.outputText && status === 'in_progress' && repliedToThisTurn) status = 'completed';
+      if (status === 'completed' && latest?.outputText && row.status !== 'completed') {
+        db.updateResponse(row.id, { status: 'completed', outputText: latest.outputText });
+      }
     } catch {
       // Keep stored response state when provider readback is unavailable.
     }
