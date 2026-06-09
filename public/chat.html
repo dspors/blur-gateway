@@ -304,6 +304,7 @@
       highWaterMark: null,
       polling: null,
       messages: [],
+      seenMessageKeys: new Set(),
     };
 
     const els = {
@@ -399,8 +400,9 @@
     function selectSession(session) {
       stopPolling();
       state.selected = session;
-      state.highWaterMark = null;
+      state.highWaterMark = loadSessionCursor(session.id);
       state.messages = [];
+      state.seenMessageKeys = new Set();
       els.model.value = session.model || session.provider || els.model.value;
       renderSessions();
       renderMessages();
@@ -413,6 +415,7 @@
       state.selected = null;
       state.highWaterMark = null;
       state.messages = [];
+      state.seenMessageKeys = new Set();
       renderSessions();
       renderMessages();
       setStatus('New session selected');
@@ -425,7 +428,7 @@
       savePrefs();
       stopPolling();
       const previousResponseId = state.selected?.id || null;
-      appendMessage({ role: 'user', text: input });
+      appendMessage({ id: `local:${Date.now()}:${Math.random().toString(16).slice(2)}`, role: 'user', text: input, local: true });
       els.prompt.value = '';
       setBusy(true);
       setStatus(previousResponseId ? 'Sending follow-up...' : 'Creating session...');
@@ -449,6 +452,7 @@
           model: response.model,
         };
         state.highWaterMark = response.metadata?.message_high_water_mark || state.highWaterMark;
+        saveSessionCursor(response.id, state.highWaterMark);
         renderSessions();
         pollResponse(response.id);
       } catch (err) {
@@ -474,6 +478,7 @@
             model: response.model,
           };
           state.highWaterMark = response.metadata?.message_high_water_mark || state.highWaterMark;
+          saveSessionCursor(response.id, state.highWaterMark);
           mergeResponse(response);
           renderSessions();
           setStatus(`${response.status}${state.highWaterMark ? ' · high-water advanced' : ''}`);
@@ -520,11 +525,23 @@
     }
 
     function appendMessage(message) {
-      const key = message.id || `${message.role}:${message.text}`;
-      if (state.messages.some(existing => (existing.id || `${existing.role}:${existing.text}`) === key)) return;
-      if (message.role === 'user' && state.messages.some(existing => existing.role === 'user' && existing.text === message.text)) return;
-      state.messages.push({ ...message, id: key });
+      if (!message.local && state.messages.some(existing => existing.role === message.role && existing.text === message.text)) return;
+      const keys = messageKeys(message);
+      if (keys.some(key => state.seenMessageKeys.has(key))) return;
+      for (const key of keys) state.seenMessageKeys.add(key);
+      state.messages.push({ ...message, id: message.id || keys[0] });
       renderMessages();
+    }
+
+    function messageKeys(message) {
+      const text = (message.text || '').trim();
+      const timestamp = message.timestamp || '';
+      const keys = [];
+      if (message.local) return [message.id || `local:${Date.now()}:${text}`];
+      if (message.id) keys.push(`id:${message.id}`);
+      if (timestamp) keys.push(`turn:${message.role}:${timestamp}:${text}`);
+      if (!timestamp) keys.push(`text:${message.role}:${text}`);
+      return keys;
     }
 
     function isHiddenProviderUserMessage(text) {
@@ -612,6 +629,20 @@
         endpoint: cleanEndpoint(els.endpoint.value),
         model: els.model.value,
       }));
+    }
+
+    function cursorStorageKey(sessionId) {
+      return `blurGatewayChatCursor:${cleanEndpoint(els.endpoint.value)}:${sessionId}`;
+    }
+
+    function saveSessionCursor(sessionId, mark) {
+      if (!sessionId || !mark) return;
+      localStorage.setItem(cursorStorageKey(sessionId), mark);
+    }
+
+    function loadSessionCursor(sessionId) {
+      if (!sessionId) return null;
+      return localStorage.getItem(cursorStorageKey(sessionId));
     }
 
     function cleanEndpoint(value) {
