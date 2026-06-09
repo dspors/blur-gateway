@@ -162,17 +162,21 @@
       text-overflow: ellipsis;
       white-space: nowrap;
       font-weight: 650;
+      font-size: 13px;
+      line-height: 1.25;
     }
     .session-meta {
       color: var(--text-dim);
-      font-size: 12px;
+      font-size: 11px;
+      line-height: 1.25;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
     .session-state {
       color: var(--text-dim);
-      font-size: 12px;
+      font-size: 11px;
+      line-height: 1.25;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -472,7 +476,7 @@
     function selectSession(session) {
       stopPolling();
       state.selected = session;
-      state.highWaterMark = loadSessionCursor(session.id);
+      state.highWaterMark = null;
       state.messages = [];
       state.seenMessageKeys = new Set();
       els.model.value = session.model || session.provider || els.model.value;
@@ -524,7 +528,6 @@
           model: response.model,
         };
         state.highWaterMark = response.metadata?.message_high_water_mark || state.highWaterMark;
-        saveSessionCursor(response.id, state.highWaterMark);
         renderSessions();
         pollResponse(response.id);
       } catch (err) {
@@ -550,7 +553,6 @@
             model: response.model,
           };
           state.highWaterMark = response.metadata?.message_high_water_mark || state.highWaterMark;
-          saveSessionCursor(response.id, state.highWaterMark);
           mergeResponse(response);
           renderSessions();
           setStatus(`${response.status}${state.highWaterMark ? ' · high-water advanced' : ''}`);
@@ -701,20 +703,6 @@
         endpoint: cleanEndpoint(els.endpoint.value),
         model: els.model.value,
       }));
-    }
-
-    function cursorStorageKey(sessionId) {
-      return `blurGatewayChatCursor:${cleanEndpoint(els.endpoint.value)}:${sessionId}`;
-    }
-
-    function saveSessionCursor(sessionId, mark) {
-      if (!sessionId || !mark) return;
-      localStorage.setItem(cursorStorageKey(sessionId), mark);
-    }
-
-    function loadSessionCursor(sessionId) {
-      if (!sessionId) return null;
-      return localStorage.getItem(cursorStorageKey(sessionId));
     }
 
     function cleanEndpoint(value) {
