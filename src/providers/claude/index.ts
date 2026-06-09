@@ -306,13 +306,17 @@ function runClaudeCli(opts: {
     if (opts.fork) args.push('--fork-session');
   }
   if (opts.title) args.push('--name', opts.title);
-  const model = opts.model || process.env.CLAUDE_CLI_MODEL;
+  const providerEnv = claudeCliProviderEnv(opts.model);
+  const model = providerEnv.modelArg || opts.model || process.env.CLAUDE_CLI_MODEL;
   if (model) args.push('--model', model);
 
   return new Promise((resolve, reject) => {
     const child = spawn(cli, args, {
       cwd: opts.cwd || undefined,
-      env: process.env,
+      env: {
+        ...process.env,
+        ...providerEnv.env,
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
@@ -361,6 +365,23 @@ function runClaudeCli(opts: {
       });
     });
   });
+}
+
+function claudeCliProviderEnv(model: string | null | undefined): { env: NodeJS.ProcessEnv; modelArg?: string } {
+  const normalized = (model || '').toLowerCase().replace(/_/g, '-');
+  if (normalized !== 'deepseek') return { env: {} };
+
+  const deepseekModel = process.env.BLUR_CLAUDE_CLI_DEEPSEEK_MODEL || 'deepseek-v4-pro[1m]';
+  const authToken = process.env.BLUR_CLAUDE_CLI_DEEPSEEK_AUTH_TOKEN || process.env.DEEPSEEK_API_KEY;
+  const env: NodeJS.ProcessEnv = {
+    ANTHROPIC_BASE_URL: process.env.BLUR_CLAUDE_CLI_DEEPSEEK_BASE_URL || 'https://api.deepseek.com/anthropic',
+    ANTHROPIC_MODEL: deepseekModel,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: process.env.BLUR_CLAUDE_CLI_DEEPSEEK_OPUS_MODEL || deepseekModel,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: process.env.BLUR_CLAUDE_CLI_DEEPSEEK_SONNET_MODEL || deepseekModel,
+    CLAUDE_CODE_EFFORT_LEVEL: process.env.BLUR_CLAUDE_CLI_DEEPSEEK_EFFORT_LEVEL || 'max',
+  };
+  if (authToken) env.ANTHROPIC_AUTH_TOKEN = authToken;
+  return { env, modelArg: deepseekModel };
 }
 
 function normalizeClaudeMessages(

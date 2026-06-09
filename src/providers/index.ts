@@ -93,6 +93,7 @@ export function availableModelOptions(): string[] {
     'claude-cli-opus',
     'claude-cli-sonnet',
     'claude-cli-haiku',
+    'claude-cli-deepseek',
   ];
   if (process.platform === 'linux') return cliModels;
   return [
