@@ -147,7 +147,7 @@
     }
     .session-row {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr);
       align-items: stretch;
       flex: 0 0 auto;
       min-height: 58px;
@@ -167,21 +167,6 @@
       border-radius: 0;
       background: transparent;
       text-align: left;
-    }
-    .session-delete {
-      align-self: stretch;
-      min-height: 0;
-      padding: 0 10px;
-      border: 0;
-      border-left: 1px solid var(--border);
-      border-radius: 0;
-      background: transparent;
-      color: var(--text-dim);
-      font-size: 11px;
-    }
-    .session-delete:hover {
-      color: var(--error);
-      background: var(--bg-hover);
     }
     .session-title {
       overflow: hidden;
@@ -206,6 +191,32 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+    .context-menu {
+      position: fixed;
+      z-index: 10;
+      min-width: 140px;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg-card);
+      box-shadow: 0 8px 24px rgba(45, 42, 38, .18);
+    }
+    .context-menu button {
+      display: block;
+      width: 100%;
+      min-height: 30px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      text-align: left;
+    }
+    .context-menu button:hover {
+      background: var(--bg-hover);
+    }
+    .context-menu button.danger {
+      color: var(--error);
     }
     .chat {
       display: grid;
@@ -383,7 +394,6 @@
       }
       .sidebar-head { padding: 8px 10px; }
       .session { padding: 8px 10px; }
-      .session-delete { padding: 0 8px; }
       footer {
         grid-template-columns: 1fr auto;
         gap: 8px;
@@ -477,6 +487,7 @@
         <button id="stop" disabled>Stop Poll</button>
       </div>
     </footer>
+    <div id="context-menu" class="context-menu hidden"></div>
   </div>
 
   <script>
@@ -503,6 +514,7 @@
       status: document.getElementById('status'),
       send: document.getElementById('send'),
       stop: document.getElementById('stop'),
+      contextMenu: document.getElementById('context-menu'),
     };
 
     const defaultEndpoints = [
@@ -524,6 +536,10 @@
       els.newSession.addEventListener('click', selectNewSession);
       els.send.addEventListener('click', sendPrompt);
       els.stop.addEventListener('click', stopPolling);
+      document.addEventListener('click', hideContextMenu);
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') hideContextMenu();
+      });
       els.prompt.addEventListener('keydown', event => {
         if (event.key !== 'Enter') return;
         if (event.shiftKey) return;
@@ -599,6 +615,7 @@
       for (const session of state.sessions) {
         const row = document.createElement('div');
         row.className = `session-row${state.selected?.id === session.id ? ' active' : ''}`;
+        row.addEventListener('contextmenu', event => showContextMenu(event, session));
         const button = document.createElement('button');
         button.className = 'session';
         button.type = 'button';
@@ -608,20 +625,67 @@
         title.textContent = session.title || session.provider_session_title || session.id;
         const meta = document.createElement('div');
         meta.className = 'session-meta';
-        meta.textContent = `${session.provider} · ${session.id}`;
+        meta.textContent = `${sessionModelLabel(session)} · ${session.provider} · ${session.id}`;
         const sessionState = document.createElement('div');
         sessionState.className = 'session-state';
         sessionState.textContent = `${sessionStatus(session)} · ${jsonlAge(session.jsonl_updated_at)}`;
         button.append(title, meta, sessionState);
-        const del = document.createElement('button');
-        del.className = 'session-delete';
-        del.type = 'button';
-        del.title = `Delete ${session.title || session.id}`;
-        del.setAttribute('aria-label', `Delete ${session.title || session.id}`);
-        del.textContent = 'Delete';
-        del.addEventListener('click', () => deleteSession(session));
-        row.append(button, del);
+        row.append(button);
         els.sessions.appendChild(row);
+      }
+    }
+
+    function showContextMenu(event, session) {
+      event.preventDefault();
+      event.stopPropagation();
+      els.contextMenu.textContent = '';
+      const rename = document.createElement('button');
+      rename.type = 'button';
+      rename.textContent = 'Rename';
+      rename.addEventListener('click', () => {
+        hideContextMenu();
+        renameSession(session);
+      });
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'danger';
+      del.textContent = 'Delete';
+      del.addEventListener('click', () => {
+        hideContextMenu();
+        deleteSession(session);
+      });
+      els.contextMenu.append(rename, del);
+      els.contextMenu.classList.remove('hidden');
+      const rect = els.contextMenu.getBoundingClientRect();
+      const left = Math.min(event.clientX, window.innerWidth - rect.width - 8);
+      const top = Math.min(event.clientY, window.innerHeight - rect.height - 8);
+      els.contextMenu.style.left = `${Math.max(8, left)}px`;
+      els.contextMenu.style.top = `${Math.max(8, top)}px`;
+    }
+
+    function hideContextMenu() {
+      els.contextMenu.classList.add('hidden');
+    }
+
+    async function renameSession(session) {
+      const current = session.title || session.provider_session_title || session.id;
+      const title = window.prompt('Rename session', current);
+      if (title === null) return;
+      const next = title.trim();
+      if (!next || next === current) return;
+      stopPolling();
+      try {
+        const updated = await api(`/v1/desktop/sessions/${encodeURIComponent(session.id)}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ title: next }),
+        });
+        state.sessions = state.sessions.map(item => item.id === session.id ? { ...item, ...updated } : item);
+        if (state.selected?.id === session.id) state.selected = { ...state.selected, ...updated };
+        renderSessions();
+        setStatus(`Renamed ${current} to ${next}`);
+      } catch (err) {
+        setStatus(err.message, true);
       }
     }
 
@@ -1005,6 +1069,10 @@
       if (/processing|in_progress/i.test(raw)) return 'Processing';
       if (/idle/i.test(raw)) return 'Idle';
       return raw;
+    }
+
+    function sessionModelLabel(session) {
+      return session.model || session.provider_model || session.provider || 'model unknown';
     }
 
     function jsonlAge(value) {

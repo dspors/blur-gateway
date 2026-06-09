@@ -149,6 +149,10 @@ export class Sqlite {
     this.exec(`update chains set last_input_text = ${sqlString(state.text)}, last_input_len = ${Number(state.len)}, last_input_hash = ${sqlString(state.hash)}, updated_at = ${sqlString(new Date().toISOString())} where id = ${sqlString(chainId)};`);
   }
 
+  updateChainTitle(chainId: string, title: string): void {
+    this.exec(`update chains set title = ${sqlString(title)}, provider_session_title = ${sqlString(title)}, updated_at = ${sqlString(new Date().toISOString())} where id = ${sqlString(chainId)};`);
+  }
+
   archiveChain(chainId: string): void {
     this.exec(`update chains set archived = 1, updated_at = ${sqlString(new Date().toISOString())} where id = ${sqlString(chainId)};`);
   }

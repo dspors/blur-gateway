@@ -580,6 +580,7 @@ function responseObject(opts: { id: string; status: string; model: string; outpu
     metadata: {
       chain_id: opts.chain.id,
       provider: opts.chain.provider,
+      model: opts.model,
       provider_session_id: opts.chain.providerSessionId || opts.chain.provider_session_id || null,
       provider_session_title: opts.chain.providerSessionTitle || opts.chain.provider_session_title || opts.chain.title,
       provider_model: opts.chain.providerModel || providerModelFromStoredModel(opts.chain.model),

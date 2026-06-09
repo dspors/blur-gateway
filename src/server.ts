@@ -8,7 +8,7 @@ import { notFound, sendBuffer, sendJson } from './utils/http';
 import { id } from './utils/ids';
 import { createResponse, getResponse, adoptResponse } from './routes/responses';
 import { createFile, getFileContent } from './routes/files';
-import { deleteDesktopSession, listDesktopSessions } from './routes/desktop';
+import { deleteDesktopSession, listDesktopSessions, updateDesktopSession } from './routes/desktop';
 import { getMetrics, listRequests } from './routes/admin';
 import { availableModelOptions } from './providers';
 
@@ -112,6 +112,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     const desktopSessionMatch = url.pathname.match(/^\/v1\/desktop\/sessions\/([^/]+)$/);
+    if (req.method === 'PATCH' && desktopSessionMatch) {
+      await updateDesktopSession(req, res, decodeURIComponent(desktopSessionMatch[1]));
+      return;
+    }
+
     if (req.method === 'DELETE' && desktopSessionMatch) {
       await deleteDesktopSession(req, res, decodeURIComponent(desktopSessionMatch[1]));
       return;
@@ -154,6 +159,6 @@ function sendChatPage(res: http.ServerResponse): void {
 
 function setCorsHeaders(res: http.ServerResponse): void {
   res.setHeader('access-control-allow-origin', '*');
-  res.setHeader('access-control-allow-methods', 'GET,POST,DELETE,OPTIONS');
+  res.setHeader('access-control-allow-methods', 'GET,POST,PATCH,DELETE,OPTIONS');
   res.setHeader('access-control-allow-headers', 'content-type,authorization,x-request-id');
 }
