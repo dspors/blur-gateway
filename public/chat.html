@@ -224,14 +224,50 @@
       gap: 8px;
     }
     .bubble .md p,
+    .bubble .md h1,
+    .bubble .md h2,
+    .bubble .md h3,
+    .bubble .md h4,
     .bubble .md ul,
     .bubble .md ol,
-    .bubble .md pre {
+    .bubble .md pre,
+    .bubble .md table {
       margin: 0;
     }
+    .bubble .md h1,
+    .bubble .md h2,
+    .bubble .md h3,
+    .bubble .md h4 {
+      color: var(--text-bright);
+      font-weight: 700;
+      line-height: 1.25;
+    }
+    .bubble .md h1 { font-size: 18px; }
+    .bubble .md h2 { font-size: 16px; }
+    .bubble .md h3 { font-size: 14px; }
+    .bubble .md h4 { font-size: 13px; }
     .bubble .md ul,
     .bubble .md ol {
       padding-left: 18px;
+    }
+    .bubble .md table {
+      width: 100%;
+      border-collapse: collapse;
+      display: block;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+    .bubble .md th,
+    .bubble .md td {
+      border: 1px solid var(--border);
+      padding: 5px 7px;
+      text-align: left;
+      vertical-align: top;
+    }
+    .bubble .md th {
+      background: var(--surface2);
+      color: var(--text-bright);
+      font-weight: 700;
     }
     .bubble .md code {
       font-family: var(--mono);
@@ -733,6 +769,7 @@
       let list = [];
       let inFence = false;
       let code = [];
+      let table = [];
 
       const flushParagraph = () => {
         if (!paragraph.length) return;
@@ -743,6 +780,11 @@
         if (!list.length) return;
         blocks.push(`<ul>${list.map(item => `<li>${inlineMarkdown(item)}</li>`).join('')}</ul>`);
         list = [];
+      };
+      const flushTable = () => {
+        if (!table.length) return;
+        blocks.push(renderTable(table));
+        table = [];
       };
       const flushCode = () => {
         blocks.push(`<pre><code>${code.join('\n')}</code></pre>`);
@@ -757,6 +799,7 @@
           } else {
             flushParagraph();
             flushList();
+            flushTable();
             inFence = true;
           }
           continue;
@@ -768,21 +811,69 @@
         const bullet = line.match(/^\s*[-*]\s+(.+)$/);
         if (bullet) {
           flushParagraph();
+          flushTable();
           list.push(bullet[1]);
+          continue;
+        }
+        const heading = line.match(/^(#{1,4})\s+(.+)$/);
+        if (heading) {
+          flushParagraph();
+          flushList();
+          flushTable();
+          const level = heading[1].length;
+          blocks.push(`<h${level}>${inlineMarkdown(heading[2].trim())}</h${level}>`);
+          continue;
+        }
+        if (isTableLine(line)) {
+          flushParagraph();
+          flushList();
+          table.push(line.trim());
           continue;
         }
         if (!line.trim()) {
           flushParagraph();
           flushList();
+          flushTable();
           continue;
         }
         flushList();
+        flushTable();
         paragraph.push(line.trim());
       }
       if (inFence) flushCode();
       flushParagraph();
       flushList();
+      flushTable();
       return `<div class="md">${blocks.join('')}</div>`;
+    }
+
+    function isTableLine(line) {
+      const trimmed = line.trim();
+      return trimmed.includes('|') && /^\|?[^|]+\|/.test(trimmed);
+    }
+
+    function isTableSeparator(line) {
+      return /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(line.trim());
+    }
+
+    function splitTableRow(line) {
+      return line.trim()
+        .replace(/^\|/, '')
+        .replace(/\|$/, '')
+        .split('|')
+        .map(cell => cell.trim());
+    }
+
+    function renderTable(lines) {
+      const rows = lines.filter(line => !isTableSeparator(line)).map(splitTableRow);
+      if (!rows.length) return '';
+      const header = rows[0];
+      const body = rows.slice(1);
+      const thead = `<thead><tr>${header.map(cell => `<th>${inlineMarkdown(cell)}</th>`).join('')}</tr></thead>`;
+      const tbody = body.length
+        ? `<tbody>${body.map(row => `<tr>${row.map(cell => `<td>${inlineMarkdown(cell)}</td>`).join('')}</tr>`).join('')}</tbody>`
+        : '';
+      return `<table>${thead}${tbody}</table>`;
     }
 
     function inlineMarkdown(value) {
