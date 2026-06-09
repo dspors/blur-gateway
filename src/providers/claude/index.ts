@@ -27,7 +27,7 @@ const claudeSessions = bridgeRequire('./lib/core/sessions.js') as {
     modifiedAt?: string | number | null;
   }>;
   readSession(jsonlPath: string, opts?: { maxMessages?: number; afterIso?: string }): Promise<Array<{ uuid?: string; parentUuid?: string | null; role?: string; type?: string; content?: unknown; timestamp?: string; toolUse?: ClaudeToolUse | ClaudeToolUse[] | null }>>;
-  readSessionHealth(jsonlPath: string): Promise<{ status?: string; message?: string; detail?: string }>;
+  readSessionHealth(jsonlPath: string): Promise<{ status?: string; message?: string; detail?: string; resolved?: boolean }>;
 };
 const claudeArchive = bridgeRequire('./lib/providers/claude/archive-flow.js') as {
   setArchived(sessionId: string, archive: boolean, ctx: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
@@ -230,7 +230,7 @@ export class ClaudeProvider implements DesktopProvider {
       const ts = Date.parse(message.timestamp);
       return Number.isFinite(ts) && ts > sinceMs;
     });
-    const assistant = startIndex >= 0 ? assistantMessages[0] : assistantMessages.at(-1);
+    const assistant = assistantMessages.at(-1);
     const richMessages = mode === 'text' ? undefined : normalizeClaudeMessages(messages, {
       mode,
       provider: this.name,
@@ -238,10 +238,15 @@ export class ClaudeProvider implements DesktopProvider {
       providerSessionId: sessionId,
       responseId: opts.responseId,
     });
+    const healthText = health?.message || health?.status;
+    const healthProcessing = health?.resolved === false || /^Processing/i.test(healthText || '');
+    const unresolvedDrivenTurn = Boolean(prompt) && Boolean(health) && health?.resolved !== true;
+    const pendingDrivenTurn = promptPending || unresolvedDrivenTurn || (Boolean(prompt) && healthProcessing);
+    const outputText = pendingDrivenTurn ? null : (assistant ? contentToText(assistant.content) : health?.detail || null);
     return {
-      status: promptPending ? 'Processing...' : (health?.status || health?.message),
-      outputText: promptPending ? null : (assistant ? contentToText(assistant.content) : health?.detail || null),
-      highWaterIso: richMessages?.length ? latestTimestamp(richMessages) : assistant?.timestamp || null,
+      status: pendingDrivenTurn ? 'Processing...' : healthText,
+      outputText,
+      highWaterIso: richMessages?.length ? latestTimestamp(richMessages) : (pendingDrivenTurn ? null : assistant?.timestamp || null),
       messages: richMessages,
     };
   }
