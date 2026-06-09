@@ -481,6 +481,7 @@
         state.sessions = data.data || [];
         renderSessions();
         setStatus(`Connected to ${state.endpoint}`);
+        restoreSelectedSession();
       } catch (err) {
         state.sessions = [];
         renderSessions();
@@ -528,7 +529,8 @@
       renderSessions();
       renderMessages();
       setStatus(`Selected ${session.title || session.id}`);
-      pollResponse(session.id);
+      saveSelectedSession(session.id);
+      pollResponse(session.id, { fullHistory: true });
     }
 
     function selectNewSession() {
@@ -572,6 +574,7 @@
           provider: response.metadata?.provider || els.model.value,
           model: response.model,
         };
+        saveSelectedSession(response.id);
         state.highWaterMark = response.metadata?.message_high_water_mark || state.highWaterMark;
         renderSessions();
         pollResponse(response.id);
@@ -582,13 +585,14 @@
       }
     }
 
-    async function pollResponse(id) {
+    async function pollResponse(id, options = {}) {
       stopPolling();
       setBusy(true);
       let delay = 700;
       const tick = async () => {
         try {
           const params = new URLSearchParams({ readback: 'messages' });
+          if (options.fullHistory && !state.highWaterMark) params.set('full_history', 'true');
           if (state.highWaterMark) params.set('high_water_mark', state.highWaterMark);
           const response = await api(`/v1/responses/${encodeURIComponent(id)}?${params}`);
           state.selected = {
@@ -824,6 +828,23 @@
         endpoint: cleanEndpoint(els.endpoint.value),
         model: els.model.value,
       }));
+    }
+
+    function selectedStorageKey() {
+      return `blurGatewayChatSelected:${cleanEndpoint(els.endpoint.value)}`;
+    }
+
+    function saveSelectedSession(sessionId) {
+      if (!sessionId) return;
+      localStorage.setItem(selectedStorageKey(), sessionId);
+    }
+
+    function restoreSelectedSession() {
+      if (state.selected || !state.sessions.length) return;
+      const selectedId = localStorage.getItem(selectedStorageKey());
+      if (!selectedId) return;
+      const session = state.sessions.find(item => item.id === selectedId);
+      if (session) selectSession(session);
     }
 
     function cleanEndpoint(value) {

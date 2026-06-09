@@ -282,7 +282,8 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
     ? highWaterFromBody(storedInput as Record<string, unknown>)
     : null;
   const urlHighWater = highWaterFromUrl(requestUrl);
-  const priorHighWater = urlHighWater ?? storedMark;
+  const fullHistory = fullHistoryFromUrl(requestUrl);
+  const priorHighWater = urlHighWater ?? (fullHistory ? null : storedMark);
   let highWaterMark = priorHighWater?.mark || null;
   if (row.provider_session_id) {
     try {
@@ -290,16 +291,19 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
       const prompt = input && typeof input === 'object' && !Array.isArray(input)
         ? inputToText((input as Record<string, unknown>).input)
         : undefined;
-      let latest = await getProvider(row.provider).readLatest?.(row.provider_session_id, priorHighWater?.timestamp || row.created_at, prompt, {
+      const sinceIso = fullHistory && !priorHighWater ? undefined : priorHighWater?.timestamp || row.created_at;
+      let latest = await getProvider(row.provider).readLatest?.(row.provider_session_id, sinceIso, prompt, {
         mode: readbackMode,
         responseId: row.id,
         responseCreatedAtIso: row.created_at,
+        maxMessages: fullHistory ? 1000 : 200,
       });
       if (urlHighWater && row.status === 'in_progress' && !latest?.outputText && !latest?.messages?.length) {
         latest = await getProvider(row.provider).readLatest?.(row.provider_session_id, storedMark?.timestamp || row.created_at, prompt, {
           mode: readbackMode,
           responseId: row.id,
           responseCreatedAtIso: row.created_at,
+          maxMessages: 200,
         });
       }
       if (latest?.outputText) outputText = latest.outputText;
@@ -602,6 +606,12 @@ function highWaterFromUrl(url: URL | null): HighWaterMark | null {
     || url.searchParams.get('message_high_water_mark')
     || undefined;
   return decodeHighWaterMark(mark || undefined);
+}
+
+function fullHistoryFromUrl(url: URL | null): boolean {
+  if (!url) return false;
+  const value = url.searchParams.get('full_history') || url.searchParams.get('history');
+  return value === 'true' || value === '1' || value === 'full';
 }
 
 function readbackModeFromBody(body: Record<string, unknown> | null | undefined, url?: URL | null): ReadbackMode {

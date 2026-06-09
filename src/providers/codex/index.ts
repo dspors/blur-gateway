@@ -97,7 +97,7 @@ export class CodexProvider implements DesktopProvider {
     }));
   }
 
-  async readLatest(sessionId: string, sinceIso?: string, prompt?: string, opts: { mode?: ReadbackMode; responseId?: string; responseCreatedAtIso?: string } = {}): Promise<ReadLatestResult> {
+  async readLatest(sessionId: string, sinceIso?: string, prompt?: string, opts: { mode?: ReadbackMode; responseId?: string; responseCreatedAtIso?: string; maxMessages?: number } = {}): Promise<ReadLatestResult> {
     const session = codexSessions.getCodexSession(sessionId);
     const sinceMs = sinceIso ? Date.parse(sinceIso) : 0;
     const fallbackBaseMs = Date.parse(opts.responseCreatedAtIso || '') || sinceMs || 0;
@@ -105,7 +105,7 @@ export class CodexProvider implements DesktopProvider {
     // Forward-drain from the mark (tkt_f76668e4): FIRST 200 turns AFTER `sinceIso`
     // (oldest-first) so an advancing mark pages a >200 backlog losslessly instead
     // of reading the newest-200 tail and post-filtering.
-    const messages = codexSessions.readTranscript(sessionId, { maxMessages: 200, mode: mode === 'events' ? 'verbose' : 'normal', afterIso: sinceIso });
+    const messages = codexSessions.readTranscript(sessionId, { maxMessages: opts.maxMessages || 200, mode: mode === 'events' ? 'verbose' : 'normal', afterIso: sinceIso });
     const startIndex = prompt ? messages.findIndex(message => {
       if ((message.role || message.type) !== 'user') return false;
       if (!message.content) return false;

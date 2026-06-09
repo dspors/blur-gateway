@@ -136,7 +136,7 @@ export class ClaudeProvider implements DesktopProvider {
       }));
   }
 
-  async readLatest(sessionId: string, sinceIso?: string, prompt?: string, opts: { mode?: ReadbackMode; responseId?: string } = {}): Promise<ReadLatestResult> {
+  async readLatest(sessionId: string, sinceIso?: string, prompt?: string, opts: { mode?: ReadbackMode; responseId?: string; maxMessages?: number } = {}): Promise<ReadLatestResult> {
     const session = findSessionById(sessionId);
     if (!session?.jsonlPath) return { outputText: null, highWaterIso: null };
 
@@ -146,7 +146,7 @@ export class ClaudeProvider implements DesktopProvider {
     // AFTER `sinceIso` (oldest-first) so an advancing mark pages a >200 backlog
     // losslessly, rather than reading the newest-200 tail and post-filtering
     // (which silently drops the oldest backlog between the mark and tail-200).
-    const messages = await claudeSessions.readSession(session.jsonlPath, { maxMessages: 200, afterIso: sinceIso });
+    const messages = await claudeSessions.readSession(session.jsonlPath, { maxMessages: opts.maxMessages || 200, afterIso: sinceIso });
     const health = await claudeSessions.readSessionHealth(session.jsonlPath).catch(() => null);
     const startIndex = prompt ? messages.findIndex(message => {
       const role = message.role || message.type;
