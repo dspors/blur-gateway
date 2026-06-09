@@ -145,21 +145,43 @@
       overflow: auto;
       background: var(--border);
     }
-    .session {
+    .session-row {
       display: grid;
-      gap: 3px;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: stretch;
       flex: 0 0 auto;
       min-height: 58px;
-      padding: 10px 12px;
-      border: 0;
-      border-radius: 0;
       background: var(--surface);
-      text-align: left;
     }
-    .session.active {
+    .session-row.active {
       background: var(--surface2);
       outline: 2px solid var(--accent);
       outline-offset: -2px;
+    }
+    .session {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+      padding: 10px 12px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      text-align: left;
+    }
+    .session-delete {
+      align-self: stretch;
+      min-height: 0;
+      padding: 0 10px;
+      border: 0;
+      border-left: 1px solid var(--border);
+      border-radius: 0;
+      background: transparent;
+      color: var(--text-dim);
+      font-size: 11px;
+    }
+    .session-delete:hover {
+      color: var(--error);
+      background: var(--bg-hover);
     }
     .session-title {
       overflow: hidden;
@@ -361,6 +383,7 @@
       }
       .sidebar-head { padding: 8px 10px; }
       .session { padding: 8px 10px; }
+      .session-delete { padding: 0 8px; }
       footer {
         grid-template-columns: 1fr auto;
         gap: 8px;
@@ -574,8 +597,10 @@
         return;
       }
       for (const session of state.sessions) {
+        const row = document.createElement('div');
+        row.className = `session-row${state.selected?.id === session.id ? ' active' : ''}`;
         const button = document.createElement('button');
-        button.className = `session${state.selected?.id === session.id ? ' active' : ''}`;
+        button.className = 'session';
         button.type = 'button';
         button.addEventListener('click', () => selectSession(session));
         const title = document.createElement('div');
@@ -588,7 +613,37 @@
         sessionState.className = 'session-state';
         sessionState.textContent = `${sessionStatus(session)} · ${jsonlAge(session.jsonl_updated_at)}`;
         button.append(title, meta, sessionState);
-        els.sessions.appendChild(button);
+        const del = document.createElement('button');
+        del.className = 'session-delete';
+        del.type = 'button';
+        del.title = `Delete ${session.title || session.id}`;
+        del.setAttribute('aria-label', `Delete ${session.title || session.id}`);
+        del.textContent = 'Delete';
+        del.addEventListener('click', () => deleteSession(session));
+        row.append(button, del);
+        els.sessions.appendChild(row);
+      }
+    }
+
+    async function deleteSession(session) {
+      const label = session.title || session.id;
+      if (!window.confirm(`Delete ${label} from this gateway list?`)) return;
+      stopPolling();
+      try {
+        await api(`/v1/desktop/sessions/${encodeURIComponent(session.id)}`, { method: 'DELETE' });
+        state.sessions = state.sessions.filter(item => item.id !== session.id);
+        if (state.selected?.id === session.id) {
+          state.selected = null;
+          state.highWaterMark = null;
+          state.messages = [];
+          state.seenMessageKeys = new Set();
+          saveSelectedSession(null);
+          renderMessages();
+        }
+        renderSessions();
+        setStatus(`Deleted ${label}`);
+      } catch (err) {
+        setStatus(err.message, true);
       }
     }
 
@@ -963,7 +1018,10 @@
     }
 
     function saveSelectedSession(sessionId) {
-      if (!sessionId) return;
+      if (!sessionId) {
+        localStorage.removeItem(selectedStorageKey());
+        return;
+      }
       localStorage.setItem(selectedStorageKey(), sessionId);
     }
 

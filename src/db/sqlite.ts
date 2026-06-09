@@ -165,6 +165,19 @@ export class Sqlite {
     return this.json('select * from chains order by updated_at desc limit 200');
   }
 
+  deleteChain(chainId: string): void {
+    this.exec(`
+      delete from response_files
+      where response_id in (select id from responses where chain_id = ${sqlString(chainId)});
+
+      delete from response_metrics
+      where response_id in (select id from responses where chain_id = ${sqlString(chainId)});
+
+      delete from responses where chain_id = ${sqlString(chainId)};
+      delete from chains where id = ${sqlString(chainId)};
+    `);
+  }
+
   insertResponse(response: any): void {
     this.exec(`insert into responses (id, chain_id, previous_response_id, status, input_json, output_text, error, created_at, updated_at)
       values (${sqlString(response.id)}, ${sqlString(response.chainId)}, ${sqlString(response.previousResponseId)},
