@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { config } from '../../config';
 import type { BlurMessage, DesktopProvider, DesktopSession, PreparedSessionInput, ProviderName, ProviderSession, ReadbackMode, ReadLatestResult, SendInput, SpawnInput, SpawnResult } from '../../types/provider';
@@ -15,6 +16,7 @@ const claudeShield = bridgeRequire('./lib/platform/claude-shield.js') as {
 const claudeSessions = bridgeRequire('./lib/core/sessions.js') as {
   listSessions(opts?: { limit?: number; provider?: string }): Array<{
     sessionId: string;
+    source?: string | null;
     title?: string | null;
     sessionType?: string | null;
     status?: string | null;
@@ -32,15 +34,34 @@ const claudeArchive = bridgeRequire('./lib/providers/claude/archive-flow.js') as
 };
 
 const DEFAULT_TIMEOUT_SECONDS = 90;
+const CLI_TIMEOUT_MS = Number(process.env.CLAUDE_CLI_TIMEOUT_MS || 30 * 60 * 1000);
+type ClaudeTransport = 'desktop' | 'cli';
 
 export class ClaudeProvider implements DesktopProvider {
   name: ProviderName;
+  private transport: ClaudeTransport;
 
-  constructor(opts: { name?: ProviderName } = {}) {
+  constructor(opts: { name?: ProviderName; transport?: ClaudeTransport } = {}) {
     this.name = opts.name || 'claude';
+    this.transport = opts.transport || (this.name === 'claude-cli' ? 'cli' : 'desktop');
   }
 
   async createPreparedSession(input: PreparedSessionInput): Promise<ProviderSession> {
+    if (this.transport === 'cli') {
+      const result = await runClaudeCli({
+        cwd: input.workspaceDir,
+        text: input.prompt,
+        title: input.title,
+        model: input.providerModel || null,
+        timeoutMs: CLI_TIMEOUT_MS,
+      });
+      if (!result.sessionId) throw new Error('Claude CLI did not report a session_id');
+      return {
+        providerSessionId: result.sessionId,
+        providerSessionTitle: input.title,
+      };
+    }
+
     const before = snapshotSessionIds();
     // ONE atomic shield call: Ctrl+3 -> Ctrl+N -> inject prompt -> rename, all
     // under a single held HID lock (no inter-step interleaving; safe against
@@ -80,6 +101,18 @@ export class ClaudeProvider implements DesktopProvider {
   }
 
   async send(input: SendInput): Promise<void> {
+    if (this.transport === 'cli') {
+      if (!input.providerSessionId) throw new Error('Claude CLI send requires providerSessionId');
+      await runClaudeCli({
+        cwd: input.workspaceDir,
+        text: input.prompt,
+        sessionId: input.providerSessionId,
+        model: input.providerModel || null,
+        timeoutMs: CLI_TIMEOUT_MS,
+      });
+      return;
+    }
+
     const result = await claudeShield.send(input.providerSessionTitle, input.prompt, {
       timeoutSeconds: DEFAULT_TIMEOUT_SECONDS,
     });
@@ -87,6 +120,24 @@ export class ClaudeProvider implements DesktopProvider {
   }
 
   async spawn(input: SpawnInput): Promise<SpawnResult> {
+    if (this.transport === 'cli') {
+      if (!input.parentSessionId) throw new Error('Claude CLI spawn requires parentSessionId');
+      const result = await runClaudeCli({
+        text: input.prompt || 'Continue.',
+        sessionId: input.parentSessionId,
+        title: input.title || undefined,
+        model: input.model || null,
+        fork: true,
+        timeoutMs: CLI_TIMEOUT_MS,
+      });
+      if (!result.sessionId) throw new Error('Claude CLI fork did not report a session_id');
+      return {
+        providerSessionId: result.sessionId,
+        providerSessionTitle: input.title || result.sessionId,
+        forkedFrom: input.parentSessionId,
+      };
+    }
+
     const before = snapshotSessionIds();
     const result = await claudeShield.spawnFromParent(input.parentSessionTitle, {
       renameTitle: input.title || undefined,
@@ -102,6 +153,11 @@ export class ClaudeProvider implements DesktopProvider {
   }
 
   async rename(input: SendInput, title: string): Promise<void> {
+    if (this.transport === 'cli') {
+      // Claude CLI does not currently expose a metadata-only rename operation
+      // for persisted sessions. The gateway updates its own chain metadata.
+      return;
+    }
     await this.send({ ...input, prompt: `/rename ${title}` });
   }
 
@@ -125,7 +181,7 @@ export class ClaudeProvider implements DesktopProvider {
 
   async listSessions(): Promise<DesktopSession[]> {
     return claudeSessions.listSessions({ limit: 500, provider: 'claude' })
-      .filter(s => !s.isArchived)
+      .filter(s => this.transport === 'cli' ? s.source === 'cli' : !s.isArchived)
       .map(s => ({
         id: s.sessionId,
         title: s.title || s.sessionId,
@@ -211,6 +267,96 @@ export class ClaudeProvider implements DesktopProvider {
 }
 
 type ClaudeToolUse = { name?: string; toolName?: string; callId?: string; id?: string; input?: unknown };
+
+type ClaudeCliResult = {
+  sessionId: string | null;
+  outputText: string | null;
+  raw: unknown;
+};
+
+function findClaudeCli(): string {
+  return process.env.CLAUDE_CLI || (process.platform === 'win32' ? 'claude.exe' : 'claude');
+}
+
+function runClaudeCli(opts: {
+  cwd?: string | null;
+  text: string;
+  sessionId?: string | null;
+  title?: string;
+  model?: string | null;
+  fork?: boolean;
+  timeoutMs: number;
+}): Promise<ClaudeCliResult> {
+  const cli = findClaudeCli();
+  const args = [
+    '-p',
+    opts.text,
+    '--output-format',
+    'json',
+    '--permission-mode',
+    process.env.CLAUDE_CLI_PERMISSION_MODE || 'bypassPermissions',
+  ];
+  if (opts.sessionId) {
+    args.push('--resume', opts.sessionId);
+    if (opts.fork) args.push('--fork-session');
+  }
+  if (opts.title) args.push('--name', opts.title);
+  const model = opts.model || process.env.CLAUDE_CLI_MODEL;
+  if (model) args.push('--model', model);
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(cli, args, {
+      cwd: opts.cwd || undefined,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGTERM');
+      reject(new Error(`Claude CLI timed out after ${opts.timeoutMs}ms`));
+    }, opts.timeoutMs);
+    child.stdout.on('data', chunk => { stdout += chunk.toString(); });
+    child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+    child.on('error', err => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on('close', code => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const rawText = stdout.trim();
+      let parsed: Record<string, unknown> | null = null;
+      if (rawText) {
+        try {
+          parsed = JSON.parse(rawText) as Record<string, unknown>;
+        } catch (err) {
+          reject(new Error(`Claude CLI returned non-JSON output${stderr.trim() ? `; stderr=${stderr.trim().slice(0, 1000)}` : ''}; stdout=${rawText.slice(0, 1000)}`));
+          return;
+        }
+      }
+      if (code !== 0 || parsed?.is_error) {
+        const detail = typeof parsed?.result === 'string' && parsed.result.trim()
+          ? parsed.result.trim()
+          : stderr.trim();
+        reject(new Error(`Claude CLI exited ${code}${detail ? `: ${detail.slice(0, 1000)}` : ''}`));
+        return;
+      }
+      resolve({
+        sessionId: typeof parsed?.session_id === 'string' ? parsed.session_id : (opts.sessionId || null),
+        outputText: typeof parsed?.result === 'string' ? parsed.result : null,
+        raw: parsed,
+      });
+    });
+  });
+}
 
 function normalizeClaudeMessages(
   messages: Array<{ uuid?: string; parentUuid?: string | null; role?: string; type?: string; content?: unknown; timestamp?: string; toolUse?: ClaudeToolUse | ClaudeToolUse[] | null }>,

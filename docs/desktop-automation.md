@@ -87,3 +87,13 @@ Notes:
   path starts with `Cmd-N` / `Ctrl-N` before opening search.
 - Codex requires the `a`, `Backspace` prime step before prompt paste.
 - Gateway readback should prefer metadata/transcripts over screenshots.
+
+CLI providers:
+
+| Function | Codex CLI | Claude CLI |
+| --- | --- | --- |
+| Create session | `codex exec --json ...` returns a thread id; gateway records it as `provider_session_id`. | `claude -p <prompt> --output-format json --name <title>` returns `session_id`; gateway records it as `provider_session_id`. |
+| Send to existing session | `codex exec resume --json <thread_id> ...` by durable thread id. | `claude -p <prompt> --resume <session_id> --output-format json` by durable session id. |
+| Model aliases | `codex-cli-gpt-5` resolves to provider `codex-cli` and `--model gpt-5`; `codex-cli-gpt-5-high` resolves to `--model gpt-5-high`. | `claude-cli-opus`, `claude-cli-sonnet`, and `claude-cli-haiku` resolve to provider `claude-cli` and the matching `--model` value. |
+| Read response | Read Codex CLI metadata and transcript files. | Read `~/.claude/projects/.../<session_id>.jsonl` through the Claude JSONL scanner. |
+| Shield behavior | None. CLI providers do not use HID automation. | None. CLI providers do not use HID automation. |

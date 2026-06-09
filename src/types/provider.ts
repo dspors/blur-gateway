@@ -1,4 +1,4 @@
-export type ProviderName = 'claude' | 'claude-desktop' | 'codex' | 'codex-desktop' | 'codex-cli';
+export type ProviderName = 'claude' | 'claude-desktop' | 'claude-cli' | 'codex' | 'codex-desktop' | 'codex-cli';
 
 export type PreparedSessionInput = {
   chainId: string;
@@ -6,6 +6,7 @@ export type PreparedSessionInput = {
   title: string;
   workspaceDir: string;
   prompt: string;
+  providerModel?: string | null;
 };
 
 export type SendInput = {
@@ -15,6 +16,7 @@ export type SendInput = {
   providerSessionTitle: string;
   workspaceDir: string;
   prompt: string;
+  providerModel?: string | null;
 };
 
 export type ProviderSession = {

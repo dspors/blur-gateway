@@ -140,6 +140,7 @@
     .session-list {
       display: flex;
       flex-direction: column;
+      flex: 1 1 auto;
       min-height: 0;
       overflow: auto;
       background: var(--border);
@@ -379,8 +380,12 @@
         <label for="model">Model</label>
         <select id="model">
           <option value="codex-cli">codex-cli</option>
-          <option value="codex-desktop">codex-desktop</option>
-          <option value="claude-desktop">claude-desktop</option>
+          <option value="codex-cli-gpt-5">codex-cli-gpt-5</option>
+          <option value="codex-cli-gpt-5-high">codex-cli-gpt-5-high</option>
+          <option value="claude-cli">claude-cli</option>
+          <option value="claude-cli-opus">claude-cli-opus</option>
+          <option value="claude-cli-sonnet">claude-cli-sonnet</option>
+          <option value="claude-cli-haiku">claude-cli-haiku</option>
         </select>
       </div>
       <button id="connect">Refresh Sessions</button>
@@ -441,18 +446,14 @@
 
     const defaultEndpoints = [
       window.location.origin,
-      'http://100.75.53.74:3480',
-      'http://100.104.75.123:3480',
-      'http://100.111.143.111:3480',
     ];
 
     init();
 
-    function init() {
+    async function init() {
       const saved = JSON.parse(localStorage.getItem('blurGatewayChat') || '{}');
       const endpoint = saved.endpoint || window.location.origin;
       els.endpoint.value = endpoint;
-      els.model.value = saved.model || 'codex-cli';
       for (const value of Array.from(new Set([endpoint, ...defaultEndpoints]))) {
         const option = document.createElement('option');
         option.value = value;
@@ -468,6 +469,7 @@
         event.preventDefault();
         sendPrompt();
       });
+      await refreshModels(saved.model || 'codex-cli');
       refreshSessions();
     }
 
@@ -477,6 +479,7 @@
       state.endpoint = cleanEndpoint(els.endpoint.value);
       setStatus('Loading sessions...');
       try {
+        await refreshModels(els.model.value);
         const data = await api('/v1/desktop/sessions');
         state.sessions = data.data || [];
         renderSessions();
@@ -487,6 +490,38 @@
         renderSessions();
         setStatus(err.message, true);
       }
+    }
+
+    async function refreshModels(preferred) {
+      const fallback = [
+        'codex-cli',
+        'codex-cli-gpt-5',
+        'codex-cli-gpt-5-high',
+        'claude-cli',
+        'claude-cli-opus',
+        'claude-cli-sonnet',
+        'claude-cli-haiku',
+      ];
+      try {
+        const data = await api('/v1/models');
+        const models = Array.isArray(data.data) ? data.data.map(item => item.id).filter(Boolean) : [];
+        renderModelOptions(models.length ? models : fallback, preferred);
+      } catch {
+        renderModelOptions(fallback, preferred);
+      }
+    }
+
+    function renderModelOptions(models, preferred) {
+      const current = preferred || els.model.value || 'codex-cli';
+      els.model.textContent = '';
+      const values = Array.from(new Set([...models, current].filter(Boolean)));
+      for (const value of values) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = value;
+        els.model.appendChild(option);
+      }
+      els.model.value = values.includes(current) ? current : values[0];
     }
 
     function renderSessions() {

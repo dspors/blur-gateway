@@ -21,25 +21,54 @@ function serializeDesktop(provider: DesktopProvider): DesktopProvider {
 }
 
 const claudeDesktop = createClaudeProvider();
+const claudeCli = createClaudeProvider('claude-cli', false);
 const codexDesktop = serializeDesktop(new CodexProvider({ name: 'codex-desktop', transport: 'desktop' }));
 const codexCli = new CodexProvider({ name: 'codex-cli', transport: 'cli' });
 
 const providers: Record<ProviderName, DesktopProvider> = {
-  claude: claudeDesktop,
+  claude: claudeCli,
   'claude-desktop': claudeDesktop,
+  'claude-cli': claudeCli,
   codex: codexCli,
   'codex-desktop': codexDesktop,
   'codex-cli': codexCli,
 };
 
 export function providerFromModel(model: string | undefined): DesktopProvider {
-  const normalized = (model || 'codex-desktop').toLowerCase();
-  if (normalized.includes('claude')) return providers['claude-desktop'];
-  if (normalized.includes('codex-cli') || normalized.includes('codex_cli')) return providers['codex-cli'];
-  if (normalized.includes('codex-desktop') || normalized.includes('codex_desktop')) return providers['codex-desktop'];
-  if (normalized === 'codex') return providers.codex;
-  if (normalized.startsWith('gpt-5.')) return providers['codex-cli'];
-  return providers['codex-desktop'];
+  return getProvider(resolveProviderModel(model).provider);
+}
+
+export function resolveProviderModel(model: string | undefined): { provider: ProviderName; providerModel: string | null; model: string } {
+  const raw = (model || 'codex-desktop').trim();
+  const normalized = raw.toLowerCase().replace(/_/g, '-');
+  if (normalized.startsWith('claude-cli-')) {
+    return { provider: 'claude-cli', providerModel: normalized.slice('claude-cli-'.length), model: raw };
+  }
+  if (normalized.startsWith('claude-desktop-')) {
+    return { provider: 'claude-desktop', providerModel: normalized.slice('claude-desktop-'.length), model: raw };
+  }
+  if (normalized.startsWith('codex-cli-')) {
+    return { provider: 'codex-cli', providerModel: normalized.slice('codex-cli-'.length), model: raw };
+  }
+  if (normalized.startsWith('codex-desktop-')) {
+    return { provider: 'codex-desktop', providerModel: normalized.slice('codex-desktop-'.length), model: raw };
+  }
+  if (normalized.startsWith('gpt-5.')) {
+    return { provider: 'codex-cli', providerModel: raw, model: raw };
+  }
+  if (normalized.startsWith('gpt-5')) {
+    return { provider: 'codex-cli', providerModel: raw, model: raw };
+  }
+  if (normalized.includes('claude-cli')) return { provider: 'claude-cli', providerModel: null, model: raw };
+  if (normalized.includes('claude-desktop')) return { provider: 'claude-desktop', providerModel: null, model: raw };
+  if (normalized === 'claude') return { provider: 'claude-cli', providerModel: null, model: raw };
+  if (normalized === 'opus' || normalized === 'sonnet' || normalized === 'haiku') {
+    return { provider: 'claude-cli', providerModel: normalized, model: raw };
+  }
+  if (normalized.includes('codex-cli')) return { provider: 'codex-cli', providerModel: null, model: raw };
+  if (normalized.includes('codex-desktop')) return { provider: 'codex-desktop', providerModel: null, model: raw };
+  if (normalized === 'codex') return { provider: 'codex-cli', providerModel: null, model: raw };
+  return { provider: 'codex-desktop', providerModel: null, model: raw };
 }
 
 export function getProvider(name: string): DesktopProvider {
@@ -49,16 +78,39 @@ export function getProvider(name: string): DesktopProvider {
 }
 
 export function allProviders(): DesktopProvider[] {
-  return [providers['claude-desktop'], providers['codex-desktop'], providers['codex-cli']];
+  if (process.platform === 'linux') {
+    return [providers['claude-cli'], providers['codex-cli']];
+  }
+  return [providers['claude-desktop'], providers['claude-cli'], providers['codex-desktop'], providers['codex-cli']];
 }
 
-function createClaudeProvider(): DesktopProvider {
+export function availableModelOptions(): string[] {
+  const cliModels = [
+    'codex-cli',
+    'codex-cli-gpt-5',
+    'codex-cli-gpt-5-high',
+    'claude-cli',
+    'claude-cli-opus',
+    'claude-cli-sonnet',
+    'claude-cli-haiku',
+  ];
+  if (process.platform === 'linux') return cliModels;
+  return [
+    ...cliModels,
+    'codex-desktop',
+    'claude-desktop',
+  ];
+}
+
+function createClaudeProvider(name: ProviderName = 'claude-desktop', serialized = true): DesktopProvider {
   try {
     const { ClaudeProvider } = require('./claude') as typeof import('./claude');
-    return serializeDesktop(new ClaudeProvider({ name: 'claude-desktop' }));
+    const transport = name === 'claude-cli' ? 'cli' : 'desktop';
+    const provider = new ClaudeProvider({ name, transport });
+    return serialized ? serializeDesktop(provider) : provider;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return unavailableProvider('claude-desktop', message);
+    return unavailableProvider(name, message);
   }
 }
 

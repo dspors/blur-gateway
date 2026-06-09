@@ -10,6 +10,7 @@ import { createResponse, getResponse, adoptResponse } from './routes/responses';
 import { createFile, getFileContent } from './routes/files';
 import { listDesktopSessions } from './routes/desktop';
 import { getMetrics, listRequests } from './routes/admin';
+import { availableModelOptions } from './providers';
 
 function init(): void {
   fs.mkdirSync(config.storageRoot, { recursive: true });
@@ -59,6 +60,17 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && (url.pathname === '/' || url.pathname === '/chat')) {
       sendChatPage(res);
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/v1/models') {
+      sendJson(res, 200, {
+        object: 'list',
+        data: availableModelOptions().map(model => ({
+          id: model,
+          object: 'model',
+        })),
+      });
       return;
     }
 
@@ -129,6 +141,8 @@ function headerString(value: string | string[] | undefined): string | null {
 
 function sendChatPage(res: http.ServerResponse): void {
   const pagePath = path.join(process.cwd(), 'public', 'chat.html');
+  res.setHeader('cache-control', 'no-store, max-age=0');
+  res.setHeader('pragma', 'no-cache');
   sendBuffer(res, 200, fs.readFileSync(pagePath), 'text/html; charset=utf-8');
 }
 

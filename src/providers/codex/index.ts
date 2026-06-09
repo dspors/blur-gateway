@@ -52,6 +52,7 @@ export class CodexProvider implements DesktopProvider {
       submit: true,
       timeoutSeconds: 60,
       transport: this.transport === 'desktop' ? 'shield' : 'cli',
+      model: input.providerModel || undefined,
     });
     if (!result.success) throw new Error(result.error || 'Codex prepared-session automation failed');
     if (result.sessionId) {
@@ -71,6 +72,7 @@ export class CodexProvider implements DesktopProvider {
       ? await codexShield.sendToThread(profile(), input.providerSessionId, input.prompt, {
         timeoutSeconds: 45,
         cwd: input.workspaceDir,
+        model: input.providerModel || undefined,
       })
       : await codexShield.send(profile(), input.providerSessionTitle, input.prompt, {
       submit: true,

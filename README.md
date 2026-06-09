@@ -16,8 +16,14 @@ Defaults:
 
 - Port: `3480`
 - Storage root: `~/.blur-gateway`
-- Providers: `codex-desktop` and `claude-desktop`
-- Provider selection: `model`, e.g. `codex-desktop` or `claude-desktop`
+- Providers: `codex-cli`, `codex-desktop`, `claude-cli`, and `claude-desktop`
+- Provider selection: `model`, e.g. `codex-cli`, `codex-desktop`,
+  `claude-cli`, or `claude-desktop`
+- Model aliases are accepted for compatibility with model-only clients:
+  `claude-cli-opus`, `claude-cli-sonnet`, `claude-cli-haiku`,
+  `codex-cli-gpt-5`, and `codex-cli-gpt-5-high`. The gateway resolves these to
+  a provider plus a provider-native model and surfaces the parsed model as
+  `metadata.provider_model`.
 - Response ids are stable session ids. A new chain returns a provider-prefixed
   id such as `codex_<id>` or `claude_<id>`; follow-up calls with
   `previous_response_id` return the same id.
@@ -81,6 +87,9 @@ Prerequisites:
   compiled natively) — no external `sqlite3` CLI is required on any platform.
 - Claude Desktop and/or Codex Desktop running on the interactive desktop being
   automated. Do not run the smoke tests from a locked or disconnected desktop.
+- For CLI providers, the corresponding CLI (`codex` or `claude`) must be
+  installed and authenticated in the environment that runs the gateway. CLI
+  providers do not require the desktop app or the HID shield.
 
 Example macOS setup:
 
@@ -143,6 +152,9 @@ curl http://localhost:3480/v1/admin/metrics
 curl -X POST http://localhost:3480/v1/responses `
   -H "Content-Type: application/json" `
   -d "{\"model\":\"claude-desktop\",\"input\":\"Reply exactly: claude windows smoke ok\"}"
+curl -X POST http://localhost:3480/v1/responses `
+  -H "Content-Type: application/json" `
+  -d "{\"model\":\"claude-cli\",\"input\":\"Reply exactly: claude cli smoke ok\"}"
 ```
 
 Codex Windows status:
@@ -159,3 +171,23 @@ Claude Windows status:
   Claude HID shield.
 - Spawn/fork support requires an existing Claude parent session and uses the
   guarded shield path with `--spawn`, `--rename-title`, and `--prompt-after`.
+
+Claude CLI status:
+
+- `claude-cli` uses `claude -p --output-format json` for create and
+  `claude -p --resume <session_id> --output-format json` for follow-up sends.
+- Aliases such as `claude-cli-opus` pass `--model opus`; aliases such as
+  `claude-cli-sonnet` pass `--model sonnet`.
+- The gateway stores the returned Claude CLI `session_id` as
+  `provider_session_id` and reads replies from the same Claude JSONL transcript
+  scanner used by desktop Claude.
+- Set `CLAUDE_CLI` to override binary discovery, `CLAUDE_CLI_MODEL` to force a
+  model, `CLAUDE_CLI_PERMISSION_MODE` to override the default
+  `bypassPermissions`, and `CLAUDE_CLI_TIMEOUT_MS` for long-running turns.
+
+Codex CLI status:
+
+- `codex-cli` uses `codex exec` for create and `codex exec resume` for
+  follow-up sends.
+- Aliases such as `codex-cli-gpt-5` pass `--model gpt-5`; aliases such as
+  `codex-cli-gpt-5-high` pass `--model gpt-5-high`.

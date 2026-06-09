@@ -7,7 +7,7 @@ import { db } from '../db/sqlite';
 import { id } from '../utils/ids';
 import { readJson, sendJson } from '../utils/http';
 import { createWorkspace, attachFilesToWorkspace } from '../storage/files';
-import { getProvider, providerFromModel } from '../providers';
+import { getProvider, resolveProviderModel } from '../providers';
 import { eventId, normalizeReadbackMode } from '../providers/readback';
 import type { BlurMessage, ReadbackMode } from '../types/provider';
 
@@ -44,9 +44,15 @@ function getClaudeSessions(): ClaudeSessionsModule {
 export async function createResponse(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await readJson(req);
   let model = stringField(body.model) || 'codex-desktop';
+  const explicitProvider = stringField(body.provider);
+  const resolved = resolveProviderModel(model);
   const previousResponseId = stringField(body.previous_response_id);
   const previousHighWater = highWaterFromBody(body);
-  let provider = providerFromModel(model);
+  let provider = explicitProvider ? getProvider(explicitProvider) : getProvider(resolved.provider);
+  const explicitProviderModel = explicitProvider && model.toLowerCase().replace(/_/g, '-') !== explicitProvider.toLowerCase().replace(/_/g, '-')
+    ? model
+    : resolved.providerModel;
+  let providerModel = providerModelFromBody(body, explicitProviderModel);
   const requestContext = (req as any).blurGateway as Record<string, unknown> | undefined;
   if (requestContext) requestContext.provider = provider.name;
   let responseId: string;
@@ -76,6 +82,8 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
     }
     provider = getProvider(chain.provider);
     model = stringField(body.model) || chain.model || model;
+    providerModel = providerModelFromBody(body, providerModelFromStoredModel(model));
+    chain.model = model;
     if (isBlurSpawn(normalizedInput)) {
       const parsed = getBlurSpawn().parseBlurSpawnArgs(normalizedInput);
       if (parsed.error) {
@@ -90,6 +98,7 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
         id: responseId,
         provider: parentChain.provider,
         model: parsed.model || parentChain.model || model,
+        providerModel: providerModelFromStoredModel(parsed.model || parentChain.model || model),
         title,
         workspaceDir,
         providerSessionId: null,
@@ -110,6 +119,7 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
       id: responseId,
       provider: provider.name,
       model,
+      providerModel,
       title,
       workspaceDir,
       providerSessionId: null,
@@ -349,6 +359,7 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
     chain: {
       id: row.chain_id,
       provider: row.provider,
+      model: row.model,
       title: row.title,
       workspaceDir: row.workspace_dir,
       providerSessionId: row.provider_session_id,
@@ -482,6 +493,11 @@ async function runResponse(opts: { responseId: string; chain: any; prompt: strin
       } else {
         await provider.send({ ...sendInput(opts), prompt: opts.prompt });
       }
+      db.updateChainSession(
+        opts.chain.id,
+        opts.chain.provider_session_id || opts.chain.providerSessionId,
+        newTitle,
+      );
       db.updateResponse(opts.responseId, { status: 'completed', outputText: `Renamed to ${newTitle}.` });
       db.updateResponseMetric(opts.metric.id, {
         completedAt: new Date().toISOString(),
@@ -499,6 +515,7 @@ async function runResponse(opts: { responseId: string; chain: any; prompt: strin
         title: opts.chain.title,
         workspaceDir: opts.chain.workspaceDir,
         prompt: opts.prompt,
+        providerModel: opts.chain.providerModel || providerModelFromStoredModel(opts.chain.model),
       });
       db.updateChainSession(opts.chain.id, session.providerSessionId, session.providerSessionTitle);
     } else {
@@ -541,6 +558,7 @@ function sendInput(opts: { responseId: string; chain: any; prompt: string }) {
     providerSessionTitle: opts.chain.provider_session_title || opts.chain.providerSessionTitle || opts.chain.title,
     workspaceDir: opts.chain.workspace_dir || opts.chain.workspaceDir,
     prompt: opts.prompt,
+    providerModel: opts.chain.providerModel || providerModelFromStoredModel(opts.chain.model),
   };
 }
 
@@ -562,6 +580,9 @@ function responseObject(opts: { id: string; status: string; model: string; outpu
     metadata: {
       chain_id: opts.chain.id,
       provider: opts.chain.provider,
+      provider_session_id: opts.chain.providerSessionId || opts.chain.provider_session_id || null,
+      provider_session_title: opts.chain.providerSessionTitle || opts.chain.provider_session_title || opts.chain.title,
+      provider_model: opts.chain.providerModel || providerModelFromStoredModel(opts.chain.model),
       desktop_title: opts.chain.providerSessionTitle || opts.chain.provider_session_title || opts.chain.title,
       workspace_dir: opts.chain.workspaceDir || opts.chain.workspace_dir,
       message_high_water_mark: opts.highWaterMark || null,
@@ -765,6 +786,25 @@ function titleFromMetadata(metadata: unknown): string | null {
   return typeof record.title === 'string' && record.title.trim() ? record.title.trim() : null;
 }
 
+function providerModelFromBody(body: Record<string, unknown> | null | undefined, fallback?: string | null): string | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return fallback || null;
+  const providerOptions = body.provider_options && typeof body.provider_options === 'object' && !Array.isArray(body.provider_options)
+    ? body.provider_options as Record<string, unknown>
+    : null;
+  const metadata = body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
+    ? body.metadata as Record<string, unknown>
+    : null;
+  return stringField(providerOptions?.model)
+    || stringField(providerOptions?.provider_model)
+    || stringField(metadata?.provider_model)
+    || fallback
+    || null;
+}
+
+function providerModelFromStoredModel(model: unknown): string | null {
+  return resolveProviderModel(typeof model === 'string' ? model : undefined).providerModel;
+}
+
 function safeJson(value: string): unknown {
   try {
     return JSON.parse(value);
@@ -785,7 +825,7 @@ function buildEnvelope(command: string, payload: unknown): unknown {
 }
 
 async function runTaskCommand(opts: { chain: any; prompt: string }): Promise<unknown> {
-  if (opts.chain.provider !== 'claude' && opts.chain.provider !== 'claude-desktop') {
+  if (opts.chain.provider !== 'claude' && opts.chain.provider !== 'claude-desktop' && opts.chain.provider !== 'claude-cli') {
     return getBlurCommand().buildBlurEnvelope('blur.Task', {
       error: { code: 'unsupported_provider', message: 'Task commands are currently supported for Claude sessions only' },
     }, { host: 'blur-gateway' });
