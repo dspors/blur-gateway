@@ -742,6 +742,13 @@
           delay = Math.min(delay + 300, 2200);
           state.polling = window.setTimeout(tick, delay);
         } catch (err) {
+          if (err.transient) {
+            delay = Math.min(delay + 1000, 6000);
+            setStatus(`${err.message} · polling will retry`, true);
+            setBusy(true);
+            state.polling = window.setTimeout(tick, delay);
+            return;
+          }
           appendMessage({ role: 'error', text: err.message });
           setStatus(err.message, true);
           setBusy(false);
@@ -960,7 +967,16 @@
 
     async function api(path, options = {}) {
       const endpoint = cleanEndpoint(els.endpoint.value);
-      const response = await fetch(`${endpoint}${path}`, options);
+      const url = `${endpoint}${path}`;
+      let response;
+      try {
+        response = await fetch(url, options);
+      } catch (err) {
+        const message = err instanceof Error && err.message ? err.message : 'fetch failed';
+        const wrapped = new Error(`Failed to fetch ${url}: ${message}`);
+        wrapped.transient = true;
+        throw wrapped;
+      }
       const text = await response.text();
       const data = text ? JSON.parse(text) : null;
       if (!response.ok) throw new Error(data?.error?.message || `${response.status} ${response.statusText}`);
