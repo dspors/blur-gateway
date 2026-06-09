@@ -6,25 +6,28 @@
   <title>Blur Gateway Chat</title>
   <style>
     :root {
-      color-scheme: dark;
+      color-scheme: light;
       --mono: 'SF Mono', 'Menlo', 'Fira Code', 'Cascadia Code', monospace;
       --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-      --bg: #080426;
-      --surface: #0B072E;
-      --surface2: #0A163B;
-      --bg-hover: #121B49;
-      --border: #24315F;
-      --text: #EAF1FF;
-      --text-dim: #AEBBDF;
-      --text-bright: #ffffff;
-      --accent: #2DA8FF;
-      --accent-hover: #55B8FF;
-      --accent-dim: #1a5a99;
-      --success: #39D98A;
-      --error: #FF5D6C;
-      --warning: #F5C451;
-      --user-bg: #0C1A3A;
-      --assistant-bg: #0B072E;
+      --bg: #F5F1EB;
+      --surface: #F5F1EB;
+      --surface2: #EDE8E1;
+      --bg-card: #FFFFFF;
+      --bg-hover: #EDE8E1;
+      --border: #D9D2C9;
+      --text: #2D2A26;
+      --text-dim: #78736C;
+      --text-bright: #1A1816;
+      --accent: #C4652A;
+      --accent-hover: #DA7756;
+      --accent-dim: #A85420;
+      --success: #5A8A4C;
+      --error: #C44040;
+      --warning: #B8860B;
+      --chat-bg: #FAF8F5;
+      --user-bg: #E3EDF7;
+      --assistant-bg: #FAF8F5;
+      --input-bg: #FFFFFF;
     }
     * {
       box-sizing: border-box;
@@ -49,7 +52,7 @@
     button, select, input, textarea {
       border: 1px solid var(--border);
       border-radius: 6px;
-      background: var(--surface2);
+      background: var(--input-bg);
       color: var(--text);
     }
     button {
@@ -60,7 +63,7 @@
     button.primary {
       border-color: var(--accent);
       background: var(--accent);
-      color: var(--bg);
+      color: #FFFFFF;
       font-weight: 650;
     }
     button:disabled {
@@ -180,6 +183,7 @@
       min-width: 0;
       min-height: 0;
       overflow: hidden;
+      background: var(--chat-bg);
     }
     .messages {
       display: flex;
@@ -210,6 +214,7 @@
     .bubble.user {
       align-self: flex-end;
       background: var(--user-bg);
+      border-color: #C8D8E6;
     }
     .bubble.assistant {
       align-self: flex-start;
