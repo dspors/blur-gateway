@@ -320,6 +320,7 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
   const fullHistory = fullHistoryFromUrl(requestUrl);
   const priorHighWater = urlHighWater ?? (fullHistory ? null : storedMark);
   let highWaterMark = priorHighWater?.mark || null;
+  let contextBytes: number | null = null;
   if (row.provider_session_id) {
     try {
       const input = storedInput;
@@ -343,6 +344,7 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
       }
       if (latest?.outputText) outputText = latest.outputText;
       if (latest?.messages?.length) blurMessages = latest.messages;
+      if (latest?.contextBytes != null) contextBytes = latest.contextBytes;
       if (latest?.highWaterIso) highWaterMark = encodeHighWaterMark({
         provider: row.provider,
         sessionId: row.provider_session_id,
@@ -391,6 +393,7 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
     error: row.error,
     highWaterMark,
     blurMessages,
+    contextBytes,
     chain: {
       id: row.chain_id,
       provider: row.provider,
@@ -597,7 +600,7 @@ function sendInput(opts: { responseId: string; chain: any; prompt: string }) {
   };
 }
 
-function responseObject(opts: { id: string; status: string; model: string; outputText?: string | null; error?: string | null; chain: any; highWaterMark?: string | null; blurMessages?: BlurMessage[] }) {
+function responseObject(opts: { id: string; status: string; model: string; outputText?: string | null; error?: string | null; chain: any; highWaterMark?: string | null; blurMessages?: BlurMessage[]; contextBytes?: number | null }) {
   const output = opts.outputText ? [{
     type: 'message',
     role: 'assistant',
@@ -622,6 +625,7 @@ function responseObject(opts: { id: string; status: string; model: string; outpu
       desktop_title: opts.chain.providerSessionTitle || opts.chain.provider_session_title || opts.chain.title,
       workspace_dir: opts.chain.workspaceDir || opts.chain.workspace_dir,
       message_high_water_mark: opts.highWaterMark || null,
+      context_bytes: opts.contextBytes ?? null,
     },
   };
   if (opts.blurMessages) response.blur_messages = opts.blurMessages;

@@ -114,6 +114,11 @@ export type ReadLatestResult = {
   // null → no human entry in tail (e.g. >64KB-tail edge case on huge turns);
   //        consumers fall back to unanchored completion.
   newestHumanUuid?: string | null;
+  // Session "context size": the on-disk size in BYTES of the provider session's
+  // jsonl transcript (a proxy for how much context the session carries). null
+  // when the path is unknown/unreadable. Surfaced to clients as metadata
+  // .context_bytes and shown in the UI as a colored KB chip.
+  contextBytes?: number | null;
 };
 
 export interface DesktopProvider {

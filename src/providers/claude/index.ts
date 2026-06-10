@@ -287,6 +287,7 @@ export class ClaudeProvider implements DesktopProvider {
       messages: richMessages,
       resolved,
       newestHumanUuid,
+      contextBytes: jsonlSizeBytes(session.jsonlPath),
     };
   }
 
@@ -484,6 +485,17 @@ function snapshotSessionIds(): Set<string> {
 
 function findSessionById(sessionId: string) {
   return claudeSessions.listSessions({ limit: 500, provider: 'claude' }).find(s => s.sessionId === sessionId);
+}
+
+/** On-disk byte size of the session jsonl — a proxy for the session's context
+ *  size. null when the path is missing/unreadable. */
+function jsonlSizeBytes(jsonlPath?: string | null): number | null {
+  if (!jsonlPath) return null;
+  try {
+    return fs.statSync(jsonlPath).size;
+  } catch {
+    return null;
+  }
 }
 
 function jsonlUpdatedAt(jsonlPath?: string | null, fallback?: string | number | null): string | null {
