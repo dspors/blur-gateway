@@ -29,11 +29,20 @@ const claudeSessions = bridgeRequire('./lib/core/sessions.js') as {
     modifiedAt?: string | number | null;
   }>;
   readSession(jsonlPath: string, opts?: { maxMessages?: number; afterIso?: string }): Promise<Array<{ uuid?: string; parentUuid?: string | null; role?: string; type?: string; content?: unknown; timestamp?: string; toolUse?: ClaudeToolUse | ClaudeToolUse[] | null }>>;
-  // resolved: tri-state (true/false/null) — null means "no transcript / unknown".
-  // newestHumanUuid: uuid of the newest non-interruption human entry in the
-  // tail window; null when none observed. See
-  // bridge/docs/claude-turn-end-signal.md for the full contract.
-  readSessionHealth(jsonlPath: string): Promise<{ status?: string; message?: string; detail?: string; resolved?: boolean | null; newestHumanUuid?: string | null }>;
+  // Returns the bridge's turn-state health snapshot. The `resolved` +
+  // `newestHumanUuid` fields are the authoritative turn-end signals
+  // documented in bridge/docs/claude-turn-end-signal.md — every return path
+  // is contractually obliged to populate them. resolved: tri-state — null
+  // means "no transcript / unknown"; false means mid-turn; true means turn
+  // complete. newestHumanUuid: uuid of the newest non-interruption human
+  // entry in the tail window; null when none observed.
+  readSessionHealth(jsonlPath: string): Promise<{
+    status?: string;
+    message?: string;
+    detail?: string;
+    resolved?: boolean | null;
+    newestHumanUuid?: string | null;
+  }>;
 };
 const claudeArchive = bridgeRequire('./lib/providers/claude/archive-flow.js') as {
   setArchived(sessionId: string, archive: boolean, ctx: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
