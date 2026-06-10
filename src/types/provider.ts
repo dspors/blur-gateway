@@ -46,6 +46,23 @@ export type DesktopSession = {
   status?: string;
   workspaceDir?: string;
   jsonlUpdatedAt?: string | null;
+  jsonlPath?: string | null;
+  metadataPath?: string | null;
+  archived?: boolean;
+};
+
+export type DeleteSessionInput = {
+  providerSessionId: string;
+  providerSessionTitle: string;
+  expectedTitle: string;
+  reason: string;
+  commit: boolean;
+};
+
+export type DeleteSessionResult = {
+  success: boolean;
+  error?: string;
+  [key: string]: unknown;
 };
 
 export type ReadbackMode = 'text' | 'messages' | 'events';
@@ -81,6 +98,22 @@ export type ReadLatestResult = {
   outputText?: string | null;
   highWaterIso?: string | null;
   messages?: BlurMessage[];
+  // Authoritative turn-end signal, per bridge/docs/claude-turn-end-signal.md.
+  //   true  → provider says the turn is done (stop_reason end_turn/stop_sequence
+  //           on Claude; task_complete on codex when wired).
+  //   false → provider says still mid-turn (tool_use cycle, mid-stream, etc).
+  //   null / undefined → provider does not surface this signal; consumers MUST
+  //           fall back to existing heuristics (treat as "unknown", never as
+  //           "resolved").
+  // The Claude provider populates this from bridge's readSessionHealth.resolved.
+  resolved?: boolean | null;
+  // uuid of the newest non-interruption human entry visible in the provider's
+  // tail window. Used for race-free anchored completion: capture pre-inject,
+  // require post-poll value to differ before treating `resolved` as "this turn
+  // is done" (vs the previous turn that was already resolved).
+  // null → no human entry in tail (e.g. >64KB-tail edge case on huge turns);
+  //        consumers fall back to unanchored completion.
+  newestHumanUuid?: string | null;
 };
 
 export interface DesktopProvider {
@@ -91,6 +124,7 @@ export interface DesktopProvider {
   rename?(session: SendInput, title: string): Promise<void>;
   archive?(session: SendInput): Promise<void>;
   unarchive?(session: SendInput): Promise<void>;
+  deleteSession?(input: DeleteSessionInput): Promise<DeleteSessionResult>;
   readLatest?(sessionId: string, sinceIso?: string, prompt?: string, opts?: { mode?: ReadbackMode; responseId?: string; responseCreatedAtIso?: string; maxMessages?: number }): Promise<ReadLatestResult>;
   listSessions(): Promise<DesktopSession[]>;
 }

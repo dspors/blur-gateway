@@ -12,7 +12,7 @@ const codexShield = bridgeRequire('./lib/platform/codex-shield.js') as {
   createPreparedSession(app: Record<string, unknown>, opts: Record<string, unknown>): Promise<{ success: boolean; error?: string; sessionId?: string; title?: string; outputText?: string | null }>;
 };
 const codexSessions = bridgeRequire('./lib/providers/codex/sessions.js') as {
-  listCodexSessions(opts?: { limit?: number }): Array<{ sessionId: string; title?: string; status?: string; jsonlPath?: string | null; modifiedAt?: string | number | null; lastActivityAt?: string | number | null }>;
+  listCodexSessions(opts?: { limit?: number }): Array<{ sessionId: string; title?: string; status?: string; isArchived?: boolean; jsonlPath?: string | null; modifiedAt?: string | number | null; lastActivityAt?: string | number | null }>;
   getCodexSession(sessionId: string): { status?: string; statusDetail?: string; jsonlPath?: string | null; modifiedAt?: string | number | null; lastActivityAt?: string | number | null } | null;
   readTranscript(sessionId: string, opts?: { maxMessages?: number; mode?: string; afterIso?: string }): Array<{ role?: string; type?: string; content?: string; timestamp?: string; toolUse?: { name?: string; callId?: string; input?: unknown } }>;
 };
@@ -95,6 +95,8 @@ export class CodexProvider implements DesktopProvider {
       title: s.title || s.sessionId,
       provider: this.name,
       status: s.status,
+      archived: Boolean(s.isArchived),
+      jsonlPath: s.jsonlPath || null,
       jsonlUpdatedAt: jsonlUpdatedAt(s.jsonlPath, s.modifiedAt || s.lastActivityAt),
     }));
   }

@@ -8,6 +8,7 @@ export type Config = {
   filesDir: string;
   sessionsDir: string;
   bridgeRoot: string;
+  sessionLifecycleKey: string | null;
 };
 
 const storageRoot = process.env.BLUR_GATEWAY_HOME || path.join(os.homedir(), '.blur-gateway');
@@ -19,4 +20,5 @@ export const config: Config = {
   filesDir: path.join(storageRoot, 'files'),
   sessionsDir: path.join(storageRoot, 'sessions'),
   bridgeRoot: process.env.BRIDGE_ROOT || '/Users/danielspors/bridge',
+  sessionLifecycleKey: process.env.BLUR_GATEWAY_SESSION_LIFECYCLE_KEY || null,
 };

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { config } from '../../config';
-import type { BlurMessage, DesktopProvider, DesktopSession, PreparedSessionInput, ProviderName, ProviderSession, ReadbackMode, ReadLatestResult, SendInput, SpawnInput, SpawnResult } from '../../types/provider';
+import type { BlurMessage, DeleteSessionInput, DeleteSessionResult, DesktopProvider, DesktopSession, PreparedSessionInput, ProviderName, ProviderSession, ReadbackMode, ReadLatestResult, SendInput, SpawnInput, SpawnResult } from '../../types/provider';
 import { afterSince, latestTimestamp, normalizeMessage, normalizeToolCall, normalizeToolResult } from '../readback';
 
 const bridgeRequire = createRequire(path.join(config.bridgeRoot, 'package.json'));
@@ -12,6 +12,7 @@ const claudeShield = bridgeRequire('./lib/platform/claude-shield.js') as {
   send(query: string, text: string, opts?: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
   renameCurrent(title: string, opts?: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
   spawnFromParent(query: string, opts?: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
+  deleteSession(query: string, opts?: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
 };
 const claudeSessions = bridgeRequire('./lib/core/sessions.js') as {
   listSessions(opts?: { limit?: number; provider?: string }): Array<{
@@ -23,11 +24,16 @@ const claudeSessions = bridgeRequire('./lib/core/sessions.js') as {
     cwd?: string | null;
     isArchived?: boolean;
     jsonlPath?: string | null;
+    metadataPath?: string | null;
     lastActivityAt?: string | number | null;
     modifiedAt?: string | number | null;
   }>;
   readSession(jsonlPath: string, opts?: { maxMessages?: number; afterIso?: string }): Promise<Array<{ uuid?: string; parentUuid?: string | null; role?: string; type?: string; content?: unknown; timestamp?: string; toolUse?: ClaudeToolUse | ClaudeToolUse[] | null }>>;
-  readSessionHealth(jsonlPath: string): Promise<{ status?: string; message?: string; detail?: string; resolved?: boolean }>;
+  // resolved: tri-state (true/false/null) — null means "no transcript / unknown".
+  // newestHumanUuid: uuid of the newest non-interruption human entry in the
+  // tail window; null when none observed. See
+  // bridge/docs/claude-turn-end-signal.md for the full contract.
+  readSessionHealth(jsonlPath: string): Promise<{ status?: string; message?: string; detail?: string; resolved?: boolean | null; newestHumanUuid?: string | null }>;
 };
 const claudeArchive = bridgeRequire('./lib/providers/claude/archive-flow.js') as {
   setArchived(sessionId: string, archive: boolean, ctx: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
@@ -188,8 +194,21 @@ export class ClaudeProvider implements DesktopProvider {
         provider: this.name,
         status: s.status || undefined,
         workspaceDir: s.cwd || undefined,
+        archived: Boolean(s.isArchived),
+        jsonlPath: s.jsonlPath || null,
+        metadataPath: s.metadataPath || null,
         jsonlUpdatedAt: jsonlUpdatedAt(s.jsonlPath, s.modifiedAt || s.lastActivityAt),
       }));
+  }
+
+  async deleteSession(input: DeleteSessionInput): Promise<DeleteSessionResult> {
+    const result = await claudeShield.deleteSession(input.providerSessionTitle || input.expectedTitle, {
+      expectedTitle: input.expectedTitle,
+      commit: input.commit,
+      timeoutSeconds: 75,
+    });
+    if (!result.success) throw new Error(result.error || 'Claude delete failed');
+    return result;
   }
 
   async readLatest(sessionId: string, sinceIso?: string, prompt?: string, opts: { mode?: ReadbackMode; responseId?: string; maxMessages?: number } = {}): Promise<ReadLatestResult> {
@@ -243,11 +262,22 @@ export class ClaudeProvider implements DesktopProvider {
     const unresolvedDrivenTurn = Boolean(prompt) && Boolean(health) && health?.resolved !== true;
     const pendingDrivenTurn = promptPending || unresolvedDrivenTurn || (Boolean(prompt) && healthProcessing);
     const outputText = pendingDrivenTurn ? null : (assistant ? contentToText(assistant.content) : health?.detail || null);
+    // Surface bridge's authoritative turn-end signals to the response-poll
+    // loop in routes/responses.ts (tkt_57ef4311). Belt-and-suspenders with
+    // upstream's pendingDrivenTurn output suppression above: that masks
+    // outputText/highWaterIso to keep the legacy completion gate from firing
+    // mid-turn; this exposes the signal for any consumer that wants to gate
+    // explicitly (and benefits other providers like codex once equivalent
+    // plumbing lands there). See bridge/docs/claude-turn-end-signal.md.
+    const resolved = pendingDrivenTurn ? false : (health?.resolved ?? null);
+    const newestHumanUuid = health?.newestHumanUuid ?? null;
     return {
       status: pendingDrivenTurn ? 'Processing...' : healthText,
       outputText,
       highWaterIso: richMessages?.length ? latestTimestamp(richMessages) : (pendingDrivenTurn ? null : assistant?.timestamp || null),
       messages: richMessages,
+      resolved,
+      newestHumanUuid,
     };
   }
 

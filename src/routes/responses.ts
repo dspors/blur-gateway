@@ -43,7 +43,8 @@ function getClaudeSessions(): ClaudeSessionsModule {
 
 export async function createResponse(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await readJson(req);
-  let model = stringField(body.model) || 'codex-desktop';
+  const requestedModel = stringField(body.model);
+  let model = requestedModel || 'codex-desktop';
   const explicitProvider = stringField(body.provider);
   const resolved = resolveProviderModel(model);
   const previousResponseId = stringField(body.previous_response_id);
@@ -53,6 +54,11 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
     ? model
     : resolved.providerModel;
   let providerModel = providerModelFromBody(body, explicitProviderModel);
+  // Capture whether the caller explicitly asked for a particular provider
+  // (either via `model` or via `provider`), for the continuation-mismatch
+  // guard below. When neither is set the caller accepts whatever the chain's
+  // provider is, so no mismatch is possible.
+  const requestedProvider = (requestedModel || explicitProvider) ? provider : null;
   const requestContext = (req as any).blurGateway as Record<string, unknown> | undefined;
   if (requestContext) requestContext.provider = provider.name;
   let responseId: string;
@@ -80,8 +86,27 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
       sendJson(res, 500, { error: { message: `Response chain missing for ${previousResponseId}` } });
       return;
     }
-    provider = getProvider(chain.provider);
-    model = stringField(body.model) || chain.model || model;
+    const chainProvider = getProvider(chain.provider);
+    // Continuation-mismatch guard: when the caller explicitly asked for a
+    // provider that disagrees with the chain's provider (and this isn't a
+    // /blur spawn, which legitimately re-providers), refuse with 409 rather
+    // than silently routing to chainProvider — the caller's intent and the
+    // request would be inconsistent.
+    if (requestedProvider && requestedProvider.name !== chainProvider.name && !isBlurSpawn(normalizedInput)) {
+      sendJson(res, 409, {
+        error: {
+          message: 'model provider conflicts with previous_response_id provider',
+          code: 'MODEL_CONTINUATION_PROVIDER_MISMATCH',
+          requested_model: requestedModel,
+          requested_provider: requestedProvider.name,
+          previous_response_id: previousResponseId,
+          continuation_provider: chainProvider.name,
+        },
+      });
+      return;
+    }
+    provider = chainProvider;
+    model = requestedModel || chain.model || model;
     providerModel = providerModelFromBody(body, providerModelFromStoredModel(model));
     chain.model = model;
     if (isBlurSpawn(normalizedInput)) {
@@ -330,8 +355,18 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
       const repliedToThisTurn = latest?.highWaterIso
         ? Date.parse(latest.highWaterIso) >= Date.parse(row.created_at)
         : false;
+      // Authoritative turn-end gate (tkt_57ef4311). Providers that surface a
+      // `resolved` signal (Claude: bridge readSessionHealth.resolved derived
+      // from JSONL stop_reason; codex: future task_complete plumbing) MUST be
+      // resolved !== false before we mark this response completed. This is
+      // belt-and-suspenders with the Claude provider's own outputText
+      // suppression while unresolved — that masks the symptom; this exposes
+      // the signal for any consumer (including codex when it gets equivalent
+      // plumbing). Providers that don't surface `resolved` (undefined/null)
+      // fall through unchanged. See bridge/docs/claude-turn-end-signal.md.
+      const turnResolved = latest?.resolved !== false;
       if (status !== 'completed' && /^Processing/i.test(latest?.status || '')) status = 'in_progress';
-      else if (latest?.outputText && status === 'in_progress' && repliedToThisTurn) status = 'completed';
+      else if (latest?.outputText && status === 'in_progress' && repliedToThisTurn && turnResolved) status = 'completed';
       if (status === 'completed' && latest?.outputText && row.status !== 'completed') {
         db.updateResponse(row.id, { status: 'completed', outputText: latest.outputText });
       }

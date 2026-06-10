@@ -9,6 +9,7 @@ import { id } from './utils/ids';
 import { createResponse, getResponse, adoptResponse } from './routes/responses';
 import { createFile, getFileContent } from './routes/files';
 import { deleteDesktopSession, listDesktopSessions, updateDesktopSession } from './routes/desktop';
+import { lifecycleDesktopSession } from './routes/session-lifecycle';
 import { getMetrics, listRequests } from './routes/admin';
 import { availableModelOptions } from './providers';
 
@@ -108,6 +109,12 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/v1/desktop/sessions') {
       await listDesktopSessions(req, res);
+      return;
+    }
+
+    const desktopSessionLifecycleMatch = url.pathname.match(/^\/v1\/desktop\/sessions\/([^/]+)\/lifecycle$/);
+    if (req.method === 'POST' && desktopSessionLifecycleMatch) {
+      await lifecycleDesktopSession(req, res, decodeURIComponent(desktopSessionLifecycleMatch[1]));
       return;
     }
 
