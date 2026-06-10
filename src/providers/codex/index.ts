@@ -143,7 +143,9 @@ export class CodexProvider implements DesktopProvider {
       outputText: promptPending ? null : (assistant?.content || session?.statusDetail || null),
       highWaterIso: richMessages?.length ? latestTimestamp(richMessages) : assistant?.timestamp || null,
       messages: richMessages,
-      contextBytes: jsonlSizeBytes(session?.jsonlPath),
+      // contextTokens: codex sessions don't expose a cache_read token count in
+      // the bridge working-history format, so the context-size chip is omitted
+      // for codex turns until that signal exists.
     };
   }
 
@@ -152,17 +154,6 @@ export class CodexProvider implements DesktopProvider {
     const found = sessions.find(s => s.title === title);
     if (!found) return null;
     return { providerSessionId: found.sessionId, providerSessionTitle: found.title || title };
-  }
-}
-
-/** On-disk byte size of the session jsonl — a proxy for the session's context
- *  size. null when the path is missing/unreadable. */
-function jsonlSizeBytes(jsonlPath?: string | null): number | null {
-  if (!jsonlPath) return null;
-  try {
-    return fs.statSync(jsonlPath).size;
-  } catch {
-    return null;
   }
 }
 

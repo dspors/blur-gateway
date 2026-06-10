@@ -47,6 +47,16 @@ const claudeSessions = bridgeRequire('./lib/core/sessions.js') as {
 const claudeArchive = bridgeRequire('./lib/providers/claude/archive-flow.js') as {
   setArchived(sessionId: string, archive: boolean, ctx: Record<string, unknown>): Promise<{ success: boolean; error?: string }>;
 };
+// Bridge "working history" — the session's CURRENT context-window usage in
+// tokens (latest assistant turn's cache_read_input_tokens), scanned from the
+// jsonl tail with an mtime/size cache. This is the real "context size", not the
+// file's byte length. See bridge/lib/core/usage.js getWorkingHistory.
+const claudeUsage = bridgeRequire('./lib/core/usage.js') as {
+  getWorkingHistory(
+    jsonlPath: string,
+    precomputedStat?: { mtimeMs: number; size: number },
+  ): { workingHistory?: number; workingHistoryPeak?: number; status?: string; compactionPending?: boolean } | null;
+};
 
 const DEFAULT_TIMEOUT_SECONDS = 90;
 const CLI_TIMEOUT_MS = Number(process.env.CLAUDE_CLI_TIMEOUT_MS || 30 * 60 * 1000);
@@ -287,7 +297,7 @@ export class ClaudeProvider implements DesktopProvider {
       messages: richMessages,
       resolved,
       newestHumanUuid,
-      contextBytes: jsonlSizeBytes(session.jsonlPath),
+      contextTokens: contextTokensFor(session.jsonlPath),
     };
   }
 
@@ -487,12 +497,14 @@ function findSessionById(sessionId: string) {
   return claudeSessions.listSessions({ limit: 500, provider: 'claude' }).find(s => s.sessionId === sessionId);
 }
 
-/** On-disk byte size of the session jsonl — a proxy for the session's context
- *  size. null when the path is missing/unreadable. */
-function jsonlSizeBytes(jsonlPath?: string | null): number | null {
+/** Current context-window usage in tokens for a session, via the bridge's
+ *  working-history scan (latest assistant cache_read_input_tokens). null when
+ *  the path is missing/unreadable or no assistant turn carries usage yet. */
+function contextTokensFor(jsonlPath?: string | null): number | null {
   if (!jsonlPath) return null;
   try {
-    return fs.statSync(jsonlPath).size;
+    const wh = claudeUsage.getWorkingHistory(jsonlPath);
+    return wh && typeof wh.workingHistory === 'number' ? wh.workingHistory : null;
   } catch {
     return null;
   }
