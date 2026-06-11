@@ -504,7 +504,9 @@ function contextTokensFor(jsonlPath?: string | null): number | null {
   if (!jsonlPath) return null;
   try {
     const wh = claudeUsage.getWorkingHistory(jsonlPath);
-    return wh && typeof wh.workingHistory === 'number' ? wh.workingHistory : null;
+    // > 0 only: working-history can momentarily read 0 for an in-progress turn
+    // before its token count lands; 0 is "no reading", not a real context size.
+    return wh && typeof wh.workingHistory === 'number' && wh.workingHistory > 0 ? wh.workingHistory : null;
   } catch {
     return null;
   }
