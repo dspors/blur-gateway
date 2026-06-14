@@ -89,7 +89,12 @@ function mimoModelId(providerModel?: string | null): string {
 
 /** Run `mimo run --format json …`; return session id + concatenated answer text. */
 async function runMimo(extraArgs: string[], prompt: string, cwd?: string): Promise<{ sessionId: string | null; text: string }> {
-  const stdout = await runCli(['run', '--format', 'json', ...extraArgs, prompt], cwd, RUN_TIMEOUT_MS);
+  // --dangerously-skip-permissions: mimo is an agentic coder that invokes tools
+  // (bash, file read/write). Run headless (no TTY, stdin closed), an un-approved
+  // tool call blocks on a confirmation prompt that can never be answered, so the
+  // turn hangs until RUN_TIMEOUT_MS fires ("mimo timed out"). Auto-approving lets
+  // tool-using prompts actually complete. Mirrors codex --yolo / claude skip-perms.
+  const stdout = await runCli(['run', '--format', 'json', '--dangerously-skip-permissions', ...extraArgs, prompt], cwd, RUN_TIMEOUT_MS);
   let sessionId: string | null = null;
   let text = '';
   for (const line of stdout.split('\n')) {
