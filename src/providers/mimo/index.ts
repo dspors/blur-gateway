@@ -82,6 +82,8 @@ function mimoModelId(providerModel?: string | null): string {
     'v2.5-pro': 'xiaomi/mimo-v2.5-pro',
     'v2.5-pro-ultraspeed': 'xiaomi/mimo-v2.5-pro-ultraspeed',
   };
+  if (m === 'deepseek') return 'deepseek/deepseek-v4-pro';
+  if (m.startsWith('deepseek')) return `deepseek/${m}`;
   return map[m] || `xiaomi/${m}`;
 }
 

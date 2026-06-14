@@ -110,6 +110,8 @@ export function availableModelOptions(): string[] {
     'mimo-cli',
     'mimo-cli-pro',
     'mimo-cli-v2.5-pro',
+    'mimo-cli-deepseek-v4-pro',
+    'mimo-cli-deepseek-v4-flash',
   ];
   if (process.platform === 'linux') return cliModels;
   return [
