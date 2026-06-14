@@ -1,5 +1,6 @@
 import type { DesktopProvider, ProviderName } from '../types/provider';
 import { CodexProvider } from './codex';
+import { MimoProvider } from './mimo';
 import { runExclusive } from './desktop-lock';
 
 // HID methods drive the single shared desktop and MUST be serialized end-to-end:
@@ -24,6 +25,7 @@ const claudeDesktop = createClaudeProvider();
 const claudeCli = createClaudeProvider('claude-cli', false);
 const codexDesktop = serializeDesktop(new CodexProvider({ name: 'codex-desktop', transport: 'desktop' }));
 const codexCli = new CodexProvider({ name: 'codex-cli', transport: 'cli' });
+const mimoCli = new MimoProvider();
 
 const providers: Record<ProviderName, DesktopProvider> = {
   claude: claudeCli,
@@ -32,6 +34,8 @@ const providers: Record<ProviderName, DesktopProvider> = {
   codex: codexCli,
   'codex-desktop': codexDesktop,
   'codex-cli': codexCli,
+  mimo: mimoCli,
+  'mimo-cli': mimoCli,
 };
 
 export function providerFromModel(model: string | undefined): DesktopProvider {
@@ -52,6 +56,15 @@ export function resolveProviderModel(model: string | undefined): { provider: Pro
   }
   if (normalized.startsWith('codex-desktop-')) {
     return { provider: 'codex-desktop', providerModel: normalized.slice('codex-desktop-'.length), model: raw };
+  }
+  if (normalized.startsWith('mimo-cli-')) {
+    return { provider: 'mimo-cli', providerModel: normalized.slice('mimo-cli-'.length), model: raw };
+  }
+  if (normalized.startsWith('mimo/') || normalized.startsWith('xiaomi/')) {
+    return { provider: 'mimo-cli', providerModel: raw, model: raw };
+  }
+  if (normalized === 'mimo' || normalized === 'mimo-cli' || normalized.includes('mimo-cli')) {
+    return { provider: 'mimo-cli', providerModel: null, model: raw };
   }
   if (normalized.startsWith('gpt-5.')) {
     return { provider: 'codex-cli', providerModel: raw, model: raw };
@@ -79,9 +92,9 @@ export function getProvider(name: string): DesktopProvider {
 
 export function allProviders(): DesktopProvider[] {
   if (process.platform === 'linux') {
-    return [providers['claude-cli'], providers['codex-cli']];
+    return [providers['claude-cli'], providers['codex-cli'], providers['mimo-cli']];
   }
-  return [providers['claude-desktop'], providers['claude-cli'], providers['codex-desktop'], providers['codex-cli']];
+  return [providers['claude-desktop'], providers['claude-cli'], providers['codex-desktop'], providers['codex-cli'], providers['mimo-cli']];
 }
 
 export function availableModelOptions(): string[] {
@@ -94,6 +107,9 @@ export function availableModelOptions(): string[] {
     'claude-cli-sonnet',
     'claude-cli-haiku',
     'claude-cli-deepseek',
+    'mimo-cli',
+    'mimo-cli-pro',
+    'mimo-cli-v2.5-pro',
   ];
   if (process.platform === 'linux') return cliModels;
   return [
