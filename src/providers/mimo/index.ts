@@ -3,9 +3,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type {
-  DesktopProvider, DesktopSession, PreparedSessionInput,
-  ProviderName, ProviderSession, ReadLatestResult, SendInput,
+  BlurMessage, DesktopProvider, DesktopSession, PreparedSessionInput,
+  ProviderName, ProviderSession, ReadbackMode, ReadLatestResult, SendInput,
 } from '../../types/provider';
+import { latestTimestamp, normalizeMessage } from '../readback';
 
 // MiMo Code (Xiaomi) provider — drives the self-contained `mimo` CLI directly
 // (no bridge needed). Each turn runs `mimo run --format json` (synchronous: the
@@ -168,43 +169,71 @@ function assistantText(parts: any[]): string {
 }
 
 /**
- * Readback straight from mimo's SQLite DB: the latest assistant message (after
- * sinceMs) and its concatenated text parts. Returns null to signal "DB
- * unavailable — fall back to `mimo export`"; a {status:'Processing...'} result
- * means the DB was read fine but no assistant turn has landed yet.
+ * Readback straight from mimo's SQLite DB. Always returns the latest assistant
+ * message (after sinceMs) as outputText/status. When `wantMessages` is set (the
+ * gateway's 'messages'/'events' readback, used by the web UI to render a whole
+ * conversation), also returns the full user+assistant transcript as BlurMessages.
+ * Returns null to signal "DB unavailable — fall back to `mimo export`".
  */
-function readLatestFromDb(sessionId: string, sinceMs: number): ReadLatestResult | null {
+function readLatestFromDb(
+  sessionId: string,
+  sinceMs: number,
+  opts?: { wantMessages?: boolean; maxMessages?: number; responseId?: string },
+): ReadLatestResult | null {
   const db = getMimoDb();
   if (!db) return null;
   try {
-    const msgs = db.prepare(
-      `SELECT id, data FROM message WHERE session_id = ? AND json_extract(data,'$.role') = 'assistant' ORDER BY time_created ASC`,
+    const rows = db.prepare(
+      'SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created ASC, id ASC',
     ).all(sessionId) as Array<{ id: string; data: string }>;
     const partStmt = db.prepare(
       'SELECT data FROM part WHERE message_id = ? ORDER BY time_created ASC, id ASC',
     );
-    let best: { text: string; t: number } | null = null;
-    for (const m of msgs) {
-      let info: any;
-      try { info = JSON.parse(m.data); } catch { continue; }
-      const t = (info.time && (info.time.completed || info.time.created)) || 0;
+    const textOf = (mid: string): string => {
       let text = '';
-      for (const p of partStmt.all(m.id) as Array<{ data: string }>) {
+      for (const p of partStmt.all(mid) as Array<{ data: string }>) {
         try {
           const pd = JSON.parse(p.data);
           if (pd.type === 'text' && typeof pd.text === 'string') text += pd.text;
         } catch { /* skip malformed part */ }
       }
-      if (!text.trim()) continue;
-      if (sinceMs && t && t <= sinceMs) continue; // only turns at/after the mark
-      best = { text, t }; // oldest->newest; keep the latest match
-    }
-    if (!best) return { status: 'Processing...', outputText: null, highWaterIso: null };
-    return {
-      status: 'completed',
-      outputText: best.text,
-      highWaterIso: best.t ? new Date(best.t).toISOString() : null,
+      return text;
     };
+    let best: { text: string; t: number } | null = null;
+    const messages: BlurMessage[] = [];
+    for (const m of rows) {
+      let info: any;
+      try { info = JSON.parse(m.data); } catch { continue; }
+      const role = info.role;
+      if (role !== 'user' && role !== 'assistant') continue;
+      const t = (info.time && (info.time.completed || info.time.created)) || 0;
+      const text = textOf(m.id);
+      if (!text.trim()) continue;
+      const afterMark = !(sinceMs && t && t <= sinceMs); // only turns at/after the mark
+      if (role === 'assistant' && afterMark) best = { text, t }; // oldest->newest; keep latest
+      if (opts?.wantMessages && afterMark) {
+        const msg = normalizeMessage({
+          provider: 'mimo-cli',
+          providerSessionId: sessionId,
+          responseId: opts.responseId,
+          role,
+          text,
+          timestamp: t ? new Date(t).toISOString() : null,
+          nativeType: 'mimo.message',
+          nativeId: m.id,
+        });
+        if (msg) messages.push(msg);
+      }
+    }
+    const result: ReadLatestResult = best
+      ? { status: 'completed', outputText: best.text, highWaterIso: best.t ? new Date(best.t).toISOString() : null }
+      : { status: 'Processing...', outputText: null, highWaterIso: null };
+    if (opts?.wantMessages) {
+      const max = opts.maxMessages;
+      result.messages = max && messages.length > max ? messages.slice(messages.length - max) : messages;
+      if (!result.highWaterIso) result.highWaterIso = latestTimestamp(result.messages);
+    }
+    return result;
   } catch {
     // Locked / schema drift / stale handle — drop it so it reopens, fall back now.
     try { db.close(); } catch { /* ignore */ }
@@ -253,10 +282,22 @@ export class MimoProvider implements DesktopProvider {
     await runMimo(extra, input.prompt, input.workspaceDir);
   }
 
-  async readLatest(sessionId: string, sinceIso?: string): Promise<ReadLatestResult> {
+  async readLatest(
+    sessionId: string,
+    sinceIso?: string,
+    _prompt?: string,
+    opts?: { mode?: ReadbackMode; responseId?: string; responseCreatedAtIso?: string; maxMessages?: number },
+  ): Promise<ReadLatestResult> {
     const sinceMs = sinceIso ? Date.parse(sinceIso) : 0;
+    // 'messages'/'events' readback (the web UI's full-transcript fetch) needs the
+    // whole conversation as BlurMessages, not just the latest outputText.
+    const wantMessages = opts?.mode === 'messages' || opts?.mode === 'events';
     // Fast path: read mimo's SQLite DB directly — no `mimo export` spawn per poll.
-    const fromDb = readLatestFromDb(sessionId, sinceMs);
+    const fromDb = readLatestFromDb(sessionId, sinceMs, {
+      wantMessages,
+      maxMessages: opts?.maxMessages,
+      responseId: opts?.responseId,
+    });
     if (fromDb) return fromDb;
     // Fallback: original export-based readback (older Node / DB unreadable).
     return readLatestViaExport(sessionId, sinceMs);
