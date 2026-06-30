@@ -189,17 +189,24 @@ function readLatestFromDb(
     const partStmt = db.prepare(
       'SELECT data FROM part WHERE message_id = ? ORDER BY time_created ASC, id ASC',
     );
-    const textOf = (mid: string): string => {
+    // Extract an assistant message's text and its turn-end signal. mimo ends each
+    // assistant message with a step-finish part: reason 'stop' = the turn is DONE;
+    // reason 'tool-calls' (or no step-finish yet) = more is coming this turn. The
+    // gateway uses `resolved` to avoid completing a turn on an intermediate message
+    // (e.g. "I'll gather info…" before the tool results and the real answer land).
+    const extractParts = (mid: string): { text: string; finishReason: string | null } => {
       let text = '';
+      let finishReason: string | null = null;
       for (const p of partStmt.all(mid) as Array<{ data: string }>) {
         try {
           const pd = JSON.parse(p.data);
           if (pd.type === 'text' && typeof pd.text === 'string') text += pd.text;
+          else if (pd.type === 'step-finish') finishReason = pd.reason ?? pd.finishReason ?? finishReason;
         } catch { /* skip malformed part */ }
       }
-      return text;
+      return { text, finishReason };
     };
-    let best: { text: string; t: number } | null = null;
+    let best: { text: string; t: number; finishReason: string | null } | null = null;
     const messages: BlurMessage[] = [];
     for (const m of rows) {
       let info: any;
@@ -207,10 +214,10 @@ function readLatestFromDb(
       const role = info.role;
       if (role !== 'user' && role !== 'assistant') continue;
       const t = (info.time && (info.time.completed || info.time.created)) || 0;
-      const text = textOf(m.id);
+      const { text, finishReason } = extractParts(m.id);
       if (!text.trim()) continue;
       const afterMark = !(sinceMs && t && t <= sinceMs); // only turns at/after the mark
-      if (role === 'assistant' && afterMark) best = { text, t }; // oldest->newest; keep latest
+      if (role === 'assistant' && afterMark) best = { text, t, finishReason }; // oldest->newest; keep latest
       if (opts?.wantMessages && afterMark) {
         const msg = normalizeMessage({
           provider: 'mimo-cli',
@@ -225,8 +232,16 @@ function readLatestFromDb(
         if (msg) messages.push(msg);
       }
     }
+    // resolved: true only when the latest assistant message ENDED the turn ('stop').
+    // Mid-turn ('tool-calls') or still streaming (no step-finish yet) → false, which
+    // keeps the gateway polling instead of completing on an intermediate message.
     const result: ReadLatestResult = best
-      ? { status: 'completed', outputText: best.text, highWaterIso: best.t ? new Date(best.t).toISOString() : null }
+      ? {
+          status: 'completed',
+          outputText: best.text,
+          highWaterIso: best.t ? new Date(best.t).toISOString() : null,
+          resolved: best.finishReason === 'stop',
+        }
       : { status: 'Processing...', outputText: null, highWaterIso: null };
     if (opts?.wantMessages) {
       const max = opts.maxMessages;
