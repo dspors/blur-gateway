@@ -9,8 +9,9 @@ import type {
 
 // MiMo Code (Xiaomi) provider — drives the self-contained `mimo` CLI directly
 // (no bridge needed). Each turn runs `mimo run --format json` (synchronous: the
-// assistant reply is written to the session DB before it returns); readback is
-// `mimo export <sessionId>`. Mirrors the codex-cli provider's create/send/read shape.
+// assistant reply is written to the session DB before it returns). Readback reads
+// mimo's SQLite DB directly via node:sqlite (see getMimoDb) instead of spawning
+// `mimo export` every poll. Mirrors the codex-cli provider's create/send/read shape.
 
 const RUN_TIMEOUT_MS = Number(process.env.MIMO_RUN_TIMEOUT_MS || 300000);
 
@@ -30,6 +31,46 @@ function findMimoCli(): string {
 }
 
 const MIMO = findMimoCli();
+
+/** Locate mimo's SQLite session DB (tables: session/message/part). */
+function mimoDbPath(): string {
+  if (process.env.MIMO_DB) return process.env.MIMO_DB;
+  return path.join(os.homedir(), '.local', 'share', 'mimocode', 'mimocode.db');
+}
+
+// Lazily-opened read-only handle to mimo's DB via Node's built-in `node:sqlite`.
+// Reading the DB directly for readback avoids spawning `mimo export` on every poll:
+// mimo is a ~100MB Bun binary that unpacks a ~4MB .so into /tmp on each launch, so
+// per-poll spawns burned CPU and leaked disk (a 5-min hang = ~150 leaked .so files).
+// Returns null when node:sqlite is unavailable (older Node) or the DB can't be
+// opened yet, so callers transparently fall back to `mimo export` — no regression.
+let _mimoDb: any = null;
+let _sqliteUnavailable = false;
+function getMimoDb(): any {
+  if (_mimoDb) return _mimoDb;
+  if (_sqliteUnavailable) return null;
+  let DatabaseSync: any;
+  try {
+    ({ DatabaseSync } = require('node:sqlite'));
+  } catch {
+    _sqliteUnavailable = true; // runtime without node:sqlite → always use export
+    return null;
+  }
+  try {
+    const p = mimoDbPath();
+    if (!fs.existsSync(p)) return null; // DB not created yet; retry cheaply later
+    // Open read-write (not readOnly): mimo runs the DB in WAL mode, and a readOnly
+    // open fails with SQLITE_CANTOPEN because it can't create the -shm file. We only
+    // ever SELECT, and `query_only` makes the connection reject any write anyway.
+    const db = new DatabaseSync(p);
+    db.exec('PRAGMA busy_timeout = 2000');
+    db.exec('PRAGMA query_only = TRUE');
+    _mimoDb = db;
+    return _mimoDb;
+  } catch {
+    return null; // transient open failure → fall back this call
+  }
+}
 
 /**
  * Run the `mimo` CLI with stdin CLOSED (stdio 'ignore'). mimo reads stdin and
@@ -126,6 +167,75 @@ function assistantText(parts: any[]): string {
     .join('');
 }
 
+/**
+ * Readback straight from mimo's SQLite DB: the latest assistant message (after
+ * sinceMs) and its concatenated text parts. Returns null to signal "DB
+ * unavailable — fall back to `mimo export`"; a {status:'Processing...'} result
+ * means the DB was read fine but no assistant turn has landed yet.
+ */
+function readLatestFromDb(sessionId: string, sinceMs: number): ReadLatestResult | null {
+  const db = getMimoDb();
+  if (!db) return null;
+  try {
+    const msgs = db.prepare(
+      `SELECT id, data FROM message WHERE session_id = ? AND json_extract(data,'$.role') = 'assistant' ORDER BY time_created ASC`,
+    ).all(sessionId) as Array<{ id: string; data: string }>;
+    const partStmt = db.prepare(
+      'SELECT data FROM part WHERE message_id = ? ORDER BY time_created ASC, id ASC',
+    );
+    let best: { text: string; t: number } | null = null;
+    for (const m of msgs) {
+      let info: any;
+      try { info = JSON.parse(m.data); } catch { continue; }
+      const t = (info.time && (info.time.completed || info.time.created)) || 0;
+      let text = '';
+      for (const p of partStmt.all(m.id) as Array<{ data: string }>) {
+        try {
+          const pd = JSON.parse(p.data);
+          if (pd.type === 'text' && typeof pd.text === 'string') text += pd.text;
+        } catch { /* skip malformed part */ }
+      }
+      if (!text.trim()) continue;
+      if (sinceMs && t && t <= sinceMs) continue; // only turns at/after the mark
+      best = { text, t }; // oldest->newest; keep the latest match
+    }
+    if (!best) return { status: 'Processing...', outputText: null, highWaterIso: null };
+    return {
+      status: 'completed',
+      outputText: best.text,
+      highWaterIso: best.t ? new Date(best.t).toISOString() : null,
+    };
+  } catch {
+    // Locked / schema drift / stale handle — drop it so it reopens, fall back now.
+    try { db.close(); } catch { /* ignore */ }
+    _mimoDb = null;
+    return null;
+  }
+}
+
+/** Original export-based readback; fallback when the DB can't be read directly. */
+async function readLatestViaExport(sessionId: string, sinceMs: number): Promise<ReadLatestResult> {
+  const data = await exportSession(sessionId);
+  if (!data || !Array.isArray(data.messages)) {
+    return { status: 'Processing...', outputText: null, highWaterIso: null };
+  }
+  let best: { text: string; t: number } | null = null;
+  for (const m of data.messages) {
+    if (!m || !m.info || m.info.role !== 'assistant') continue;
+    const t = (m.info.time && (m.info.time.completed || m.info.time.created)) || 0;
+    const text = assistantText(m.parts);
+    if (!text.trim()) continue;
+    if (sinceMs && t && t <= sinceMs) continue;
+    best = { text, t };
+  }
+  if (!best) return { status: 'Processing...', outputText: null, highWaterIso: null };
+  return {
+    status: 'completed',
+    outputText: best.text,
+    highWaterIso: best.t ? new Date(best.t).toISOString() : null,
+  };
+}
+
 export class MimoProvider implements DesktopProvider {
   name: ProviderName = 'mimo-cli';
 
@@ -144,26 +254,12 @@ export class MimoProvider implements DesktopProvider {
   }
 
   async readLatest(sessionId: string, sinceIso?: string): Promise<ReadLatestResult> {
-    const data = await exportSession(sessionId);
-    if (!data || !Array.isArray(data.messages)) {
-      return { status: 'Processing...', outputText: null, highWaterIso: null };
-    }
     const sinceMs = sinceIso ? Date.parse(sinceIso) : 0;
-    let best: { text: string; t: number } | null = null;
-    for (const m of data.messages) {
-      if (!m || !m.info || m.info.role !== 'assistant') continue;
-      const t = (m.info.time && (m.info.time.completed || m.info.time.created)) || 0;
-      const text = assistantText(m.parts);
-      if (!text.trim()) continue;
-      if (sinceMs && t && t <= sinceMs) continue; // only turns at/after the mark
-      best = { text, t }; // messages are oldest->newest; keep the latest match
-    }
-    if (!best) return { status: 'Processing...', outputText: null, highWaterIso: null };
-    return {
-      status: 'completed',
-      outputText: best.text,
-      highWaterIso: best.t ? new Date(best.t).toISOString() : null,
-    };
+    // Fast path: read mimo's SQLite DB directly — no `mimo export` spawn per poll.
+    const fromDb = readLatestFromDb(sessionId, sinceMs);
+    if (fromDb) return fromDb;
+    // Fallback: original export-based readback (older Node / DB unreadable).
+    return readLatestViaExport(sessionId, sinceMs);
   }
 
   async listSessions(): Promise<DesktopSession[]> {
