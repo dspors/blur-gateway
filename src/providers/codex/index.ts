@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 import { config } from '../../config';
 import type { BlurMessage, DesktopProvider, DesktopSession, PreparedSessionInput, ProviderName, ProviderSession, ReadbackMode, ReadLatestResult, SendInput } from '../../types/provider';
@@ -188,7 +189,13 @@ function normalizeCodexMessages(
     });
     if (!timestamp) continue;
     const role = message.role || message.type || '';
-    const nativeId = `codex:${index}:${message.type || role || 'message'}`;
+    // Position-INDEPENDENT identity. Deriving nativeId from `index` made the
+    // same logical record hash to a different msg_/evt_ id on each poll, because
+    // readTranscript returns a sliding afterIso window whose indices shift as the
+    // high-water mark advances — so the recorder's upsert-by-id could not collapse
+    // re-emissions and inserted duplicate captures (tkt_8c5077ef). Hash stable raw
+    // fields instead, so a given codex record yields the same id across polls.
+    const nativeId = stableCodexNativeId(message);
     if (role === 'user' || role === 'assistant') {
       const item = normalizeMessage({
         provider: opts.provider,
@@ -219,4 +226,20 @@ function normalizeCodexMessages(
     }
   }
   return normalized.sort((a, b) => Date.parse(a.timestamp || '') - Date.parse(b.timestamp || ''));
+}
+
+// Stable, position-independent native id for a codex transcript record. Derived
+// from the record's own content (role/type, tool callId, raw timestamp, text)
+// rather than its array index, so the same logical record produces the same id
+// on every poll regardless of where it falls in the sliding afterIso window.
+// This is what lets messageId()/eventId() stay stable across polls and lets the
+// recorder dedup by upsert-id instead of inserting duplicate captures.
+function stableCodexNativeId(message: { role?: string; type?: string; content?: string; timestamp?: string; toolUse?: { callId?: string } }): string {
+  const basis = [
+    message.type || message.role || 'message',
+    message.toolUse?.callId || '',
+    message.timestamp || '',
+    message.content || '',
+  ].join(' ');
+  return `codex:${crypto.createHash('sha256').update(basis).digest('hex').slice(0, 24)}`;
 }
