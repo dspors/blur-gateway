@@ -63,21 +63,52 @@
       --md-body: #FFFFFF;       /* EGA 15 — bright white */
       --md-code: #55FFFF;       /* EGA 11 — bright cyan */
     }
-    /* EGA colour hierarchy for rendered message markdown (dark theme only).
-       Light theme keeps its existing muted styling — these rules are scoped to
-       [data-theme="dark"] so nothing changes there. */
-    :root[data-theme="dark"] .bubble .md h1,
-    :root[data-theme="dark"] .bubble .md h2,
-    :root[data-theme="dark"] .bubble .md h3,
-    :root[data-theme="dark"] .bubble .md h4 { color: var(--md-heading); }
-    :root[data-theme="dark"] .bubble .md p,
-    :root[data-theme="dark"] .bubble .md li,
-    :root[data-theme="dark"] .bubble .md td { color: var(--md-body); }
-    :root[data-theme="dark"] .bubble .md strong { color: var(--md-heading); } /* bold emphasis reads as a mini-header */
-    :root[data-theme="dark"] .bubble .md code,
-    :root[data-theme="dark"] .bubble .md .path,
-    :root[data-theme="dark"] .bubble .md a { color: var(--md-code); }
-    :root[data-theme="dark"] .bubble .md .path { word-break: break-all; } /* long /Users/… paths wrap instead of overflowing */
+    /* Ubuntu Server Console theme — mimics the text-console login palette:
+       green [ OK ]-style section headers, white body, blue directory paths.
+       A third opt-in choice to A/B against the EGA theme. Shares the same
+       --md-* role mechanism, so no new .md rules are needed. */
+    :root[data-theme="ubuntu"] {
+      color-scheme: dark;
+      --bg: #300A24;            /* Ubuntu terminal aubergine-black */
+      --surface: #300A24;
+      --surface2: #481231;      /* lighter aubergine panel (code/table bg) */
+      --bg-card: #3A0E2C;
+      --bg-hover: #521539;
+      --border: #75507B;        /* Ubuntu aubergine accent border */
+      --text: #EEEEEC;          /* Ubuntu "Aluminium" white body text */
+      --text-dim: #AAAAAA;      /* gray, minor/secondary UI */
+      --text-bright: #8AE234;   /* Ubuntu light green, headers/emphasis */
+      --accent: #8AE234;        /* Ubuntu light green (interactive/[ OK ]) */
+      --accent-hover: #B9F76A;  /* lighter green on hover */
+      --accent-dim: #729FCF;    /* Ubuntu "Sky Blue" for subtle accents */
+      --success: #8AE234;       /* green */
+      --error: #EF2929;         /* Ubuntu "Scarlet Red" */
+      --warning: #FCE94F;       /* Ubuntu "Butter" yellow */
+      --chat-bg: #300A24;
+      --user-bg: #3D2246;       /* muted aubergine tint for user bubbles */
+      --assistant-bg: #3A0E2C;
+      --input-bg: #2A0820;      /* darker aubergine input */
+      /* Message-text roles */
+      --md-heading: #8AE234;    /* Ubuntu light green — [ OK ]-style headers */
+      --md-body: #EEEEEC;       /* Ubuntu aluminium white — body */
+      --md-code: #729FCF;       /* Ubuntu sky blue — paths/code, like `ls` dirs */
+    }
+    /* Message-markdown colour hierarchy. Applies to any theme that defines the
+       --md-* role vars (currently the dark themes); the default light theme sets
+       none, so it keeps its existing muted styling untouched. Adding a new dark
+       theme is just a new [data-theme="…"] var block below — no new rules here. */
+    :root[data-theme]:not([data-theme="light"]) .bubble .md h1,
+    :root[data-theme]:not([data-theme="light"]) .bubble .md h2,
+    :root[data-theme]:not([data-theme="light"]) .bubble .md h3,
+    :root[data-theme]:not([data-theme="light"]) .bubble .md h4 { color: var(--md-heading); }
+    :root[data-theme]:not([data-theme="light"]) .bubble .md p,
+    :root[data-theme]:not([data-theme="light"]) .bubble .md li,
+    :root[data-theme]:not([data-theme="light"]) .bubble .md td { color: var(--md-body); }
+    :root[data-theme]:not([data-theme="light"]) .bubble .md strong { color: var(--md-heading); } /* bold emphasis reads as a mini-header */
+    :root[data-theme]:not([data-theme="light"]) .bubble .md code,
+    :root[data-theme]:not([data-theme="light"]) .bubble .md .path,
+    :root[data-theme]:not([data-theme="light"]) .bubble .md a { color: var(--md-code); }
+    :root[data-theme]:not([data-theme="light"]) .bubble .md .path { word-break: break-all; } /* long /Users/… paths wrap instead of overflowing */
     * {
       box-sizing: border-box;
       margin: 0;
@@ -513,6 +544,7 @@
         <select id="theme">
           <option value="light">Light</option>
           <option value="dark">High-Contrast Dark</option>
+          <option value="ubuntu">Ubuntu Server Console</option>
         </select>
       </div>
       <button id="connect">Refresh Sessions</button>
@@ -548,13 +580,15 @@
 
   <script>
     // Theme: apply the saved choice ASAP (before first paint of the controls)
-    // to avoid a light→dark flash. Light is the default; 'dark' is the opt-in
-    // high-contrast Ubuntu-terminal theme. Persisted in localStorage.
+    // to avoid a flash. Light is the default (no data-theme attribute); the
+    // non-light themes set data-theme=<name>. Persisted in localStorage.
     const THEME_KEY = 'blurGatewayTheme';
+    const THEMES = ['light', 'dark', 'ubuntu'];
+    function normalizeTheme(name) { return THEMES.includes(name) ? name : 'light'; }
     function applyTheme(name) {
-      const t = name === 'dark' ? 'dark' : 'light';
-      if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
-      else document.documentElement.removeAttribute('data-theme');
+      const t = normalizeTheme(name);
+      if (t === 'light') document.documentElement.removeAttribute('data-theme');
+      else document.documentElement.setAttribute('data-theme', t);
     }
     try { applyTheme(localStorage.getItem(THEME_KEY)); } catch (_) {}
 
@@ -589,11 +623,11 @@
     // switch + persist on change.
     (function initThemeControl() {
       let saved = 'light';
-      try { saved = localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light'; } catch (_) {}
+      try { saved = normalizeTheme(localStorage.getItem(THEME_KEY)); } catch (_) {}
       if (els.theme) {
         els.theme.value = saved;
         els.theme.addEventListener('change', () => {
-          const t = els.theme.value === 'dark' ? 'dark' : 'light';
+          const t = normalizeTheme(els.theme.value);
           applyTheme(t);
           try { localStorage.setItem(THEME_KEY, t); } catch (_) {}
         });
