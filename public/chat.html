@@ -69,12 +69,12 @@
        --md-* role mechanism, so no new .md rules are needed. */
     :root[data-theme="ubuntu"] {
       color-scheme: dark;
-      --bg: #300A24;            /* Ubuntu terminal aubergine-black */
-      --surface: #300A24;
-      --surface2: #481231;      /* lighter aubergine panel (code/table bg) */
-      --bg-card: #3A0E2C;
-      --bg-hover: #521539;
-      --border: #75507B;        /* Ubuntu aubergine accent border */
+      --bg: #000000;            /* black background */
+      --surface: #000000;
+      --surface2: #1A1A1A;      /* near-black panel fill (code/table bg) */
+      --bg-card: #0A0A0A;
+      --bg-hover: #3D1533;      /* aubergine tint for focused/selected items */
+      --border: #75507B;        /* Ubuntu aubergine accent border (kept) */
       --text: #EEEEEC;          /* Ubuntu "Aluminium" white body text */
       --text-dim: #AAAAAA;      /* gray, minor/secondary UI */
       --text-bright: #8AE234;   /* Ubuntu light green, headers/emphasis */
@@ -84,10 +84,10 @@
       --success: #8AE234;       /* green */
       --error: #EF2929;         /* Ubuntu "Scarlet Red" */
       --warning: #FCE94F;       /* Ubuntu "Butter" yellow */
-      --chat-bg: #300A24;
-      --user-bg: #3D2246;       /* muted aubergine tint for user bubbles */
-      --assistant-bg: #3A0E2C;
-      --input-bg: #2A0820;      /* darker aubergine input */
+      --chat-bg: #000000;
+      --user-bg: #241C22;       /* subtle aubergine-black tint for user bubbles */
+      --assistant-bg: #0A0A0A;
+      --input-bg: #000000;      /* black input */
       /* Message-text roles */
       --md-heading: #8AE234;    /* Ubuntu light green — [ OK ]-style headers */
       --md-body: #EEEEEC;       /* Ubuntu aluminium white — body */
@@ -182,15 +182,27 @@
       overflow: hidden;
     }
     header {
-      display: grid;
-      grid-template-columns: minmax(220px, 1fr) minmax(180px, 280px) auto auto;
-      gap: 12px;
+      display: flex;
+      flex-wrap: nowrap;           /* keep controls on one line by default */
       align-items: end;
+      gap: 12px;
       padding: 12px 14px;
       border-bottom: 1px solid var(--border);
       background: var(--surface);
       flex-shrink: 0;
     }
+    /* Endpoint field: the flexible one — takes leftover space but shrinks first
+       so the Model/Theme selects + buttons stay on the top line. */
+    header > div:first-child {
+      flex: 1 1 auto;
+      min-width: 90px;             /* can get small, but stays usable */
+    }
+    header > div:first-child #endpoint { width: 100%; }
+    /* Model / Theme select wrappers: sized to content, don't shrink away. */
+    header > div:not(:first-child) { flex: 0 0 auto; }
+    header #model { min-width: 150px; }
+    header #theme { min-width: 120px; }
+    header button { flex: 0 0 auto; white-space: nowrap; }
     main {
       display: grid;
       grid-template-columns: 320px 1fr;
@@ -453,12 +465,12 @@
     }
     @media (max-width: 820px) {
       header {
-        grid-template-columns: minmax(0, 1fr) minmax(120px, .55fr);
+        flex-wrap: wrap;           /* only wrap on genuinely narrow screens */
         gap: 8px;
         padding: 10px;
       }
       header > div:first-child {
-        grid-column: 1 / -1;
+        flex-basis: 100%;          /* endpoint takes the full first line */
       }
       header button {
         min-height: 34px;
