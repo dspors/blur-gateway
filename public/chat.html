@@ -29,32 +29,55 @@
       --assistant-bg: #FAF8F5;
       --input-bg: #FFFFFF;
     }
-    /* High-contrast dark theme — Ubuntu-terminal palette (near-black bg, bright
-       off-white text, Ubuntu green accent). Opt-in via the Theme selector; the
-       light theme above is unchanged. Every element already reads these vars,
-       so only the values change here. */
+    /* High-contrast dark theme — EGA-16 palette for a scannable colour hierarchy
+       on this text-heavy interface. Opt-in via the Theme selector; the light
+       theme above is unchanged. Colour roles (see .md overrides further down):
+         headers  → bright yellow (#FFFF55)  section signposts
+         body     → bright white  (#FFFFFF)  dense reading text
+         code/path→ bright cyan   (#55FFFF)  technical tokens & file paths
+         minor UI → light gray    (#AAAAAA)  sidebar / metadata / timestamps
+         bg       → black          (#000000) */
     :root[data-theme="dark"] {
       color-scheme: dark;
-      --bg: #1B1B1B;            /* Ubuntu terminal background */
-      --surface: #1B1B1B;
-      --surface2: #2B2B2B;
-      --bg-card: #2B2B2B;
-      --bg-hover: #3A3A3A;
-      --border: #5A5A5A;        /* brighter than typical for high contrast */
-      --text: #F2F2F2;          /* near-white body text */
-      --text-dim: #B8B8B8;      /* dim text still ~AA on the dark bg */
-      --text-bright: #FFFFFF;
-      --accent: #4E9A06;        /* Ubuntu green */
-      --accent-hover: #73D216;  /* brighter green on hover */
-      --accent-dim: #8AE234;    /* light green for subtle accents */
-      --success: #8AE234;       /* green */
-      --error: #EF5350;         /* bright red, legible on black */
-      --warning: #FCE94F;       /* Ubuntu yellow */
-      --chat-bg: #1B1B1B;
-      --user-bg: #204010;       /* dark green tint for user bubbles */
-      --assistant-bg: #262626;
-      --input-bg: #0F0F0F;      /* true-black input for terminal feel */
+      --bg: #000000;            /* EGA 0  — black */
+      --surface: #000000;
+      --surface2: #151515;      /* near-black panel fill (code/table bg) */
+      --bg-card: #0C0C0C;
+      --bg-hover: #1E1E1E;
+      --border: #555555;        /* EGA 8 gray, bright enough for high contrast */
+      --text: #FFFFFF;          /* EGA 15 — bright white body text */
+      --text-dim: #AAAAAA;      /* EGA 7  — light gray, minor/secondary UI */
+      --text-bright: #FFFF55;   /* EGA 14 — bright yellow, headers/emphasis */
+      --accent: #55FF55;        /* EGA 10 — bright green, buttons/active */
+      --accent-hover: #AAFFAA;  /* lighter green on hover */
+      --accent-dim: #55FFFF;    /* EGA 11 — bright cyan, technical accents */
+      --success: #55FF55;       /* EGA 10 — bright green */
+      --error: #FF5555;         /* EGA 12 — bright red */
+      --warning: #FFFF55;       /* EGA 14 — bright yellow */
+      --chat-bg: #000000;
+      --user-bg: #002A2A;       /* dark cyan tint for user bubbles */
+      --assistant-bg: #0C0C0C;
+      --input-bg: #000000;      /* true black input for terminal feel */
+      /* Message-text roles (consumed by the .md overrides below) */
+      --md-heading: #FFFF55;    /* EGA 14 — bright yellow */
+      --md-body: #FFFFFF;       /* EGA 15 — bright white */
+      --md-code: #55FFFF;       /* EGA 11 — bright cyan */
     }
+    /* EGA colour hierarchy for rendered message markdown (dark theme only).
+       Light theme keeps its existing muted styling — these rules are scoped to
+       [data-theme="dark"] so nothing changes there. */
+    :root[data-theme="dark"] .bubble .md h1,
+    :root[data-theme="dark"] .bubble .md h2,
+    :root[data-theme="dark"] .bubble .md h3,
+    :root[data-theme="dark"] .bubble .md h4 { color: var(--md-heading); }
+    :root[data-theme="dark"] .bubble .md p,
+    :root[data-theme="dark"] .bubble .md li,
+    :root[data-theme="dark"] .bubble .md td { color: var(--md-body); }
+    :root[data-theme="dark"] .bubble .md strong { color: var(--md-heading); } /* bold emphasis reads as a mini-header */
+    :root[data-theme="dark"] .bubble .md code,
+    :root[data-theme="dark"] .bubble .md .path,
+    :root[data-theme="dark"] .bubble .md a { color: var(--md-code); }
+    :root[data-theme="dark"] .bubble .md .path { word-break: break-all; } /* long /Users/… paths wrap instead of overflowing */
     * {
       box-sizing: border-box;
       margin: 0;
@@ -1064,11 +1087,42 @@
     }
 
     function inlineMarkdown(value) {
-      return value
+      const html = value
         .replace(/`([^`]+)`/g, '<code>$1</code>')
         .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
         .replace(/\*([^*]+)\*/g, '<em>$1</em>')
         .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      return highlightPaths(html);
+    }
+
+    // Wrap bare filesystem paths and URLs in <span class="path"> so the dark
+    // theme can colour them cyan (grouping "technical data"). Best-practice
+    // safety: operate ONLY on text OUTSIDE existing tags — split on tags and
+    // transform the plain-text segments, so we never touch an existing
+    // <code>/<a>/<strong> (paths already in backticks stay as code) and can't
+    // corrupt attributes. Input is already HTML-escaped, so `/` `.` `-` etc. are
+    // literal; `&#39;`/`&quot;` entities are left intact by the char class.
+    function highlightPaths(html) {
+      // Absolute/relative unix paths (≥2 segments) and http(s) URLs.
+      const PATH_RE = /((?:https?:\/\/|~\/|\.{0,2}\/)[A-Za-z0-9._\-/]*[A-Za-z0-9._\-/])/g;
+      // Split on tags so we only transform plain-text segments. Track whether
+      // we're inside a <code> or <a> element — content there is already a
+      // distinct token (and already cyan), so skip it to avoid double-wrapping.
+      let skipDepth = 0;
+      return html.split(/(<[^>]+>)/).map(seg => {
+        if (seg.startsWith('<')) {
+          if (/^<(code|a)\b/i.test(seg)) skipDepth++;
+          else if (/^<\/(code|a)>/i.test(seg) && skipDepth > 0) skipDepth--;
+          return seg; // a tag — leave untouched
+        }
+        if (skipDepth > 0) return seg; // inside <code>/<a> — don't re-wrap
+        return seg.replace(PATH_RE, m => {
+          // require it to actually look like a path/URL (has a slash and a
+          // second path char) to avoid wrapping a lone "/" or bare ".."
+          if (!/\//.test(m) || m.length < 3) return m;
+          return `<span class="path">${m}</span>`;
+        });
+      }).join('');
     }
 
     function escapeHtml(value) {
