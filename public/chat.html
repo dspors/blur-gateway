@@ -29,6 +29,32 @@
       --assistant-bg: #FAF8F5;
       --input-bg: #FFFFFF;
     }
+    /* High-contrast dark theme — Ubuntu-terminal palette (near-black bg, bright
+       off-white text, Ubuntu green accent). Opt-in via the Theme selector; the
+       light theme above is unchanged. Every element already reads these vars,
+       so only the values change here. */
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #1B1B1B;            /* Ubuntu terminal background */
+      --surface: #1B1B1B;
+      --surface2: #2B2B2B;
+      --bg-card: #2B2B2B;
+      --bg-hover: #3A3A3A;
+      --border: #5A5A5A;        /* brighter than typical for high contrast */
+      --text: #F2F2F2;          /* near-white body text */
+      --text-dim: #B8B8B8;      /* dim text still ~AA on the dark bg */
+      --text-bright: #FFFFFF;
+      --accent: #4E9A06;        /* Ubuntu green */
+      --accent-hover: #73D216;  /* brighter green on hover */
+      --accent-dim: #8AE234;    /* light green for subtle accents */
+      --success: #8AE234;       /* green */
+      --error: #EF5350;         /* bright red, legible on black */
+      --warning: #FCE94F;       /* Ubuntu yellow */
+      --chat-bg: #1B1B1B;
+      --user-bg: #204010;       /* dark green tint for user bubbles */
+      --assistant-bg: #262626;
+      --input-bg: #0F0F0F;      /* true-black input for terminal feel */
+    }
     * {
       box-sizing: border-box;
       margin: 0;
@@ -459,6 +485,13 @@
           <option value="claude-cli-haiku">claude-cli-haiku</option>
         </select>
       </div>
+      <div>
+        <label for="theme">Theme</label>
+        <select id="theme">
+          <option value="light">Light</option>
+          <option value="dark">High-Contrast Dark</option>
+        </select>
+      </div>
       <button id="connect">Refresh Sessions</button>
       <button id="new-session">New Session</button>
     </header>
@@ -491,6 +524,17 @@
   </div>
 
   <script>
+    // Theme: apply the saved choice ASAP (before first paint of the controls)
+    // to avoid a light→dark flash. Light is the default; 'dark' is the opt-in
+    // high-contrast Ubuntu-terminal theme. Persisted in localStorage.
+    const THEME_KEY = 'blurGatewayTheme';
+    function applyTheme(name) {
+      const t = name === 'dark' ? 'dark' : 'light';
+      if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+      else document.documentElement.removeAttribute('data-theme');
+    }
+    try { applyTheme(localStorage.getItem(THEME_KEY)); } catch (_) {}
+
     const state = {
       endpoint: '',
       sessions: [],
@@ -515,7 +559,23 @@
       send: document.getElementById('send'),
       stop: document.getElementById('stop'),
       contextMenu: document.getElementById('context-menu'),
+      theme: document.getElementById('theme'),
     };
+
+    // Sync the Theme <select> with the current (already-applied) theme, and
+    // switch + persist on change.
+    (function initThemeControl() {
+      let saved = 'light';
+      try { saved = localStorage.getItem(THEME_KEY) === 'dark' ? 'dark' : 'light'; } catch (_) {}
+      if (els.theme) {
+        els.theme.value = saved;
+        els.theme.addEventListener('change', () => {
+          const t = els.theme.value === 'dark' ? 'dark' : 'light';
+          applyTheme(t);
+          try { localStorage.setItem(THEME_KEY, t); } catch (_) {}
+        });
+      }
+    })();
 
     const defaultEndpoints = [
       window.location.origin,
