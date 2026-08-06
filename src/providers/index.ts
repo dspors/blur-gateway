@@ -111,6 +111,7 @@ export function availableModelOptions(): string[] {
     // `mimo-cli-pro` (mimo-v2-pro) were removed 2026-08-06 — MiMo retired the
     // auto channel and the entire v2 line (both 404 at runtime). See
     // mimoModelId in ./mimo/index.ts.
+    'mimo-cli-v2.5',
     'mimo-cli-v2.5-pro',
     'mimo-cli-v2.5-pro-ultraspeed',
     'mimo-cli-deepseek-v4-pro',
