@@ -1,6 +1,7 @@
 import type { DesktopProvider, ProviderName } from '../types/provider';
 import { CodexProvider } from './codex';
 import { MimoProvider } from './mimo';
+import { QwenProvider } from './qwen';
 import { runExclusive } from './desktop-lock';
 
 // HID methods drive the single shared desktop and MUST be serialized end-to-end:
@@ -26,6 +27,7 @@ const claudeCli = createClaudeProvider('claude-cli', false);
 const codexDesktop = serializeDesktop(new CodexProvider({ name: 'codex-desktop', transport: 'desktop' }));
 const codexCli = new CodexProvider({ name: 'codex-cli', transport: 'cli' });
 const mimoCli = new MimoProvider();
+const qwenCli = new QwenProvider();
 
 const providers: Record<ProviderName, DesktopProvider> = {
   claude: claudeCli,
@@ -36,6 +38,8 @@ const providers: Record<ProviderName, DesktopProvider> = {
   'codex-cli': codexCli,
   mimo: mimoCli,
   'mimo-cli': mimoCli,
+  qwen: qwenCli,
+  'qwen-cli': qwenCli,
 };
 
 export function providerFromModel(model: string | undefined): DesktopProvider {
@@ -66,6 +70,12 @@ export function resolveProviderModel(model: string | undefined): { provider: Pro
   if (normalized === 'mimo' || normalized === 'mimo-cli' || normalized.includes('mimo-cli')) {
     return { provider: 'mimo-cli', providerModel: null, model: raw };
   }
+  if (normalized.startsWith('qwen-cli-')) {
+    return { provider: 'qwen-cli', providerModel: normalized.slice('qwen-cli-'.length), model: raw };
+  }
+  if (normalized === 'qwen' || normalized === 'qwen-cli' || normalized.includes('qwen-cli')) {
+    return { provider: 'qwen-cli', providerModel: null, model: raw };
+  }
   if (normalized.startsWith('gpt-5.')) {
     return { provider: 'codex-cli', providerModel: raw, model: raw };
   }
@@ -92,9 +102,9 @@ export function getProvider(name: string): DesktopProvider {
 
 export function allProviders(): DesktopProvider[] {
   if (process.platform === 'linux') {
-    return [providers['claude-cli'], providers['codex-cli'], providers['mimo-cli']];
+    return [providers['claude-cli'], providers['codex-cli'], providers['mimo-cli'], providers['qwen-cli']];
   }
-  return [providers['claude-desktop'], providers['claude-cli'], providers['codex-desktop'], providers['codex-cli'], providers['mimo-cli']];
+  return [providers['claude-desktop'], providers['claude-cli'], providers['codex-desktop'], providers['codex-cli'], providers['mimo-cli'], providers['qwen-cli']];
 }
 
 export function availableModelOptions(): string[] {
@@ -116,6 +126,17 @@ export function availableModelOptions(): string[] {
     'mimo-cli-v2.5-pro-ultraspeed',
     'mimo-cli-deepseek-v4-pro',
     'mimo-cli-deepseek-v4-flash',
+    // Qwen Code (qwen-code CLI) — runs on pre-AVX2 hardware (box3). Models are
+    // the Alibaba token-plan text/reasoning set; `qwen-cli` bare → default
+    // (qwen3.8-max). See qwenModelId in ./qwen/index.ts.
+    'qwen-cli',
+    'qwen-cli-qwen3.8-max',
+    'qwen-cli-qwen3.7-plus',
+    'qwen-cli-qwen3.7-max',
+    'qwen-cli-qwen3.6-flash',
+    'qwen-cli-qwen3-coder-plus',
+    'qwen-cli-deepseek-v4-pro',
+    'qwen-cli-glm-5.2',
   ];
   if (process.platform === 'linux') return cliModels;
   return [
