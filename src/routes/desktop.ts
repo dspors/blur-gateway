@@ -4,15 +4,21 @@ import path from 'node:path';
 import { allProviders } from '../providers';
 import { db } from '../db/sqlite';
 import { readJson, sendJson } from '../utils/http';
+import { timerFrom } from '../utils/timing';
 import { config } from '../config';
 
 export async function listDesktopSessions(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const timer = timerFrom(_req);
+  // Each provider's listSessions() shells out or reads its own store (mimo:
+  // `mimo session list`; codex: state sqlite; claude: bridge). On first boot
+  // these run cold and can dominate. Time each provider separately so
+  // /v1/admin/stats shows which one is the slow one.
   const providerSessions = (await Promise.all(allProviders().map(async provider => {
-    try {
-      return await provider.listSessions();
-    } catch {
-      return [];
-    }
+    const run = async () => {
+      try { return await provider.listSessions(); }
+      catch { return []; }
+    };
+    return timer ? await timer.time(`listSessions.${provider.name}`, run) : await run();
   }))).flat();
   const providerSessionById = new Map(
     providerSessions
@@ -20,9 +26,10 @@ export async function listDesktopSessions(_req: IncomingMessage, res: ServerResp
       .map(session => [session.id, session]),
   );
 
+  const chains = timer ? timer.timeSync('db.listChains', () => db.listChains()) : db.listChains();
   sendJson(res, 200, {
     object: 'list',
-    data: db.listChains().map(chain => {
+    data: chains.map(chain => {
       const providerSession = chain.provider_session_id
         ? providerSessionById.get(chain.provider_session_id)
         : null;

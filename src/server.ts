@@ -6,11 +6,12 @@ import { db } from './db/sqlite';
 import { ensureStorage } from './storage/files';
 import { notFound, sendBuffer, sendJson } from './utils/http';
 import { id } from './utils/ids';
+import { StageTimer } from './utils/timing';
 import { createResponse, getResponse, adoptResponse } from './routes/responses';
 import { createFile, getFileContent } from './routes/files';
 import { deleteDesktopSession, listDesktopSessions, updateDesktopSession } from './routes/desktop';
 import { lifecycleDesktopSession } from './routes/session-lifecycle';
-import { getMetrics, listRequests } from './routes/admin';
+import { getMetrics, listRequests, getStats } from './routes/admin';
 import { availableModelOptions } from './providers';
 
 function init(): void {
@@ -22,7 +23,8 @@ function init(): void {
 const server = http.createServer(async (req, res) => {
   const started = Date.now();
   const requestId = id('req');
-  const requestContext: Record<string, unknown> = { requestId };
+  const timer = new StageTimer();
+  const requestContext: Record<string, unknown> = { requestId, timer };
   (req as any).blurGateway = requestContext;
   res.setHeader('x-request-id', requestId);
   setCorsHeaders(res);
@@ -51,6 +53,10 @@ const server = http.createServer(async (req, res) => {
         responseId: typeof requestContext.responseId === 'string' ? requestContext.responseId : null,
         provider: typeof requestContext.provider === 'string' ? requestContext.provider : null,
         error: typeof requestContext.error === 'string' ? requestContext.error : null,
+        // Per-stage timings (JSON {stage: ms}) so /v1/admin/stats can pinpoint
+        // which sub-step of a slow request (db read, provider readLatest,
+        // message normalize, …) actually costs the time.
+        stageTimings: timer.size ? JSON.stringify(timer.toObject()) : null,
       });
     } catch (err) {
       console.error('[blur-gateway] request log failed:', err instanceof Error ? err.message : String(err));
@@ -131,6 +137,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'GET' && url.pathname === '/v1/admin/metrics') {
       await getMetrics(req, res, url);
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/v1/admin/stats') {
+      await getStats(req, res, url);
       return;
     }
 

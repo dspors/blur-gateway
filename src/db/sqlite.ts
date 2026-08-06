@@ -109,6 +109,8 @@ export class Sqlite {
     this.ensureColumn('chains', 'last_input_text', 'text');
     this.ensureColumn('chains', 'last_input_len', 'integer');
     this.ensureColumn('chains', 'last_input_hash', 'text');
+    // Per-request stage timings (JSON {stage: ms}); additive, older rows null.
+    this.ensureColumn('request_log', 'stage_timings', 'text');
   }
 
   exec(sql: string): void {
@@ -225,13 +227,71 @@ export class Sqlite {
   insertRequestLog(row: any): void {
     this.exec(`insert into request_log
       (id, timestamp, method, path, status_code, duration_ms, remote_addr, user_agent, host, x_forwarded_for,
-       x_request_id, authorization_present, content_length, response_id, provider, error)
+       x_request_id, authorization_present, content_length, response_id, provider, error, stage_timings)
       values (${sqlString(row.id)}, ${sqlString(row.timestamp)}, ${sqlString(row.method)}, ${sqlString(row.path)},
               ${Number(row.statusCode || 0)}, ${Number(row.durationMs || 0)}, ${sqlString(row.remoteAddr)},
               ${sqlString(row.userAgent)}, ${sqlString(row.host)}, ${sqlString(row.xForwardedFor)},
               ${sqlString(row.xRequestId)}, ${row.authorizationPresent ? 1 : 0},
               ${row.contentLength === undefined || row.contentLength === null ? 'null' : Number(row.contentLength)},
-              ${sqlString(row.responseId)}, ${sqlString(row.provider)}, ${sqlString(row.error)});`);
+              ${sqlString(row.responseId)}, ${sqlString(row.provider)}, ${sqlString(row.error)}, ${sqlString(row.stageTimings)});`);
+  }
+
+  /**
+   * Per-stage timing aggregation over recent request logs, for /v1/admin/stats.
+   * Reads stage_timings JSON off the last `limit` requests (optionally filtered
+   * by path prefix) and returns, per (path, stage), the count/avg/p50/p95/max in
+   * ms — so the slowest sub-step of a slow request is obvious. Pure JS
+   * aggregation (SQLite has no percentile fn); bounded row scan keeps it cheap.
+   */
+  stageStats(opts: { limit?: number; pathPrefix?: string } = {}): any {
+    const bounded = Math.max(1, Math.min(opts.limit || 2000, 20000));
+    const where = opts.pathPrefix
+      ? `where stage_timings is not null and path like ${sqlString(opts.pathPrefix + '%')}`
+      : `where stage_timings is not null`;
+    const rows = this.json(
+      `select path, duration_ms, stage_timings from request_log ${where} order by timestamp desc limit ${bounded}`,
+    ) as Array<{ path: string; duration_ms: number; stage_timings: string }>;
+
+    // key = path + ' ' + stage → sorted list of ms
+    const buckets = new Map<string, { path: string; stage: string; samples: number[] }>();
+    const totalByPath = new Map<string, number[]>(); // path → total request duration_ms samples
+    for (const r of rows) {
+      const pathTotals = totalByPath.get(r.path) || [];
+      pathTotals.push(Number(r.duration_ms) || 0);
+      totalByPath.set(r.path, pathTotals);
+      let parsed: Record<string, number> | null = null;
+      try { parsed = JSON.parse(r.stage_timings); } catch { parsed = null; }
+      if (!parsed) continue;
+      for (const [stage, ms] of Object.entries(parsed)) {
+        const k = r.path + ' ' + stage;
+        const b = buckets.get(k) || { path: r.path, stage, samples: [] };
+        b.samples.push(Number(ms) || 0);
+        buckets.set(k, b);
+      }
+    }
+    const pct = (sorted: number[], p: number) => {
+      if (!sorted.length) return 0;
+      const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
+      return sorted[idx];
+    };
+    const summarize = (samples: number[]) => {
+      const s = [...samples].sort((a, b) => a - b);
+      const sum = s.reduce((a, b) => a + b, 0);
+      return {
+        count: s.length,
+        avg_ms: s.length ? Math.round(sum / s.length) : 0,
+        p50_ms: pct(s, 50),
+        p95_ms: pct(s, 95),
+        max_ms: s.length ? s[s.length - 1] : 0,
+      };
+    };
+    const stages = [...buckets.values()]
+      .map(b => ({ path: b.path, stage: b.stage, ...summarize(b.samples) }))
+      .sort((a, b) => b.p95_ms - a.p95_ms); // slowest first
+    const perPath = [...totalByPath.entries()]
+      .map(([path, samples]) => ({ path, request_total: summarize(samples) }))
+      .sort((a, b) => b.request_total.p95_ms - a.request_total.p95_ms);
+    return { sampled_requests: rows.length, per_path_total: perPath, stages };
   }
 
   listRequestLog(limit = 100): any[] {

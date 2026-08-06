@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { config } from '../config';
 import { db } from '../db/sqlite';
 import { id } from '../utils/ids';
+import { timerFrom } from '../utils/timing';
 import { readJson, sendJson } from '../utils/http';
 import { createWorkspace, attachFilesToWorkspace } from '../storage/files';
 import { getProvider, resolveProviderModel } from '../providers';
@@ -285,7 +286,8 @@ export async function adoptResponse(req: IncomingMessage, res: ServerResponse): 
 }
 
 export async function getResponse(_req: IncomingMessage, res: ServerResponse, responseId: string): Promise<void> {
-  const row = db.getResponse(responseId);
+  const timer = timerFrom(_req);
+  const row = timer ? timer.timeSync('db.getResponse', () => db.getResponse(responseId)) : db.getResponse(responseId);
   if (!row) {
     sendJson(res, 404, { error: { message: `Unknown response: ${responseId}` } });
     return;
@@ -328,12 +330,18 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
         ? inputToText((input as Record<string, unknown>).input)
         : undefined;
       const sinceIso = fullHistory && !priorHighWater ? undefined : priorHighWater?.timestamp || row.created_at;
-      let latest = await getProvider(row.provider).readLatest?.(row.provider_session_id, sinceIso, prompt, {
+      // The heavy stage on a session-switch/first-load: the provider reads its
+      // transcript store (mimo/codex sqlite, Claude JSONL) — up to 1000 msgs on
+      // full_history. Time it under a name that records the provider + whether
+      // this was a full-history read, so /v1/admin/stats separates the two.
+      const readStage = `provider.readLatest.${row.provider}${fullHistory ? '.full' : ''}`;
+      const runRead = async () => getProvider(row.provider).readLatest?.(row.provider_session_id, sinceIso, prompt, {
         mode: readbackMode,
         responseId: row.id,
         responseCreatedAtIso: row.created_at,
         maxMessages: fullHistory ? 1000 : 200,
       });
+      let latest = timer ? await timer.time(readStage, runRead) : await runRead();
       if (urlHighWater && row.status === 'in_progress' && !latest?.outputText && !latest?.messages?.length) {
         latest = await getProvider(row.provider).readLatest?.(row.provider_session_id, storedMark?.timestamp || row.created_at, prompt, {
           mode: readbackMode,
