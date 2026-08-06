@@ -60,12 +60,14 @@ function getMimoDb(): any {
   try {
     const p = mimoDbPath();
     if (!fs.existsSync(p)) return null; // DB not created yet; retry cheaply later
-    // Open read-write (not readOnly): mimo runs the DB in WAL mode, and a readOnly
-    // open fails with SQLITE_CANTOPEN because it can't create the -shm file. We only
-    // ever SELECT, and `query_only` makes the connection reject any write anyway.
-    const db = new DatabaseSync(p);
-    db.exec('PRAGMA busy_timeout = 2000');
-    db.exec('PRAGMA query_only = TRUE');
+    // Open via the immutable URI. mimo runs the DB in WAL mode; a plain open (even
+    // read-write) intermittently fails with "unable to open database file (14)"
+    // when it can't attach the -shm segment while mimo is mid-write — observed in
+    // the gateway log, which forced the session-list direct-read to fall back to
+    // the slow `mimo session list` spawn. `immutable=1` tells SQLite the file
+    // won't change under us, so it bypasses the WAL/-shm/locking machinery and
+    // reads pages directly — no shm, no error 14. Safe: we only ever SELECT.
+    const db = new DatabaseSync(`file:${p}?immutable=1`);
     _mimoDb = db;
     return _mimoDb;
   } catch {
@@ -328,6 +330,13 @@ export class MimoProvider implements DesktopProvider {
   }
 
   async listSessions(): Promise<DesktopSession[]> {
+    // Fast path: read the `session` table directly (same DB the readback path
+    // uses via getMimoDb). Avoids spawning `mimo session list` — a ~100MB Bun
+    // binary whose cold launch dominated /v1/desktop/sessions (≈6s on the
+    // memory-pressured Mac; see /v1/admin/stats listSessions.mimo-cli). Falls
+    // back to the CLI when the DB isn't readable (older Node / not created yet).
+    const rows = listSessionsFromDb();
+    if (rows) return rows;
     try {
       const stdout = await runCli(['session', 'list'], undefined, 30000);
       const out: DesktopSession[] = [];
@@ -340,5 +349,31 @@ export class MimoProvider implements DesktopProvider {
     } catch {
       return [];
     }
+  }
+}
+
+/**
+ * Read the session list straight from mimo's sqlite `session` table (columns:
+ * id, title, time_updated, time_archived). Newest first, archived excluded.
+ * Returns null when the DB is unavailable so the caller falls back to the CLI.
+ */
+function listSessionsFromDb(): DesktopSession[] | null {
+  const db = getMimoDb();
+  if (!db) return null;
+  try {
+    const rows = db.prepare(
+      'SELECT id, title FROM session WHERE time_archived IS NULL ORDER BY time_updated DESC',
+    ).all() as Array<{ id: string; title: string | null }>;
+    return rows.map(r => ({
+      id: r.id,
+      title: (r.title || '').trim() || r.id,
+      provider: 'mimo-cli' as ProviderName,
+      status: 'idle',
+    }));
+  } catch {
+    // Locked / schema drift — drop the handle so it reopens, fall back this call.
+    try { db.close(); } catch { /* ignore */ }
+    _mimoDb = null;
+    return null;
   }
 }

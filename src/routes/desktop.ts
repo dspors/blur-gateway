@@ -7,18 +7,38 @@ import { readJson, sendJson } from '../utils/http';
 import { timerFrom } from '../utils/timing';
 import { config } from '../config';
 
+// Short-TTL cache of each provider's session list, keyed by provider name. The
+// list changes rarely between rapid session-switches / transcript re-renders, so
+// serving a few-seconds-stale list avoids re-spawning CLIs (claude/codex) or
+// re-querying on every request. Providers that read a store directly (mimo, now)
+// are already fast, but the cache still spares them redundant work. A caller can
+// force-refresh with ?refresh=1.
+const SESSION_LIST_TTL_MS = 8000;
+const _sessionListCache = new Map<string, { at: number; data: DesktopSessionRow[] }>();
+type DesktopSessionRow = Awaited<ReturnType<ReturnType<typeof allProviders>[number]['listSessions']>>[number];
+
 export async function listDesktopSessions(_req: IncomingMessage, res: ServerResponse): Promise<void> {
   const timer = timerFrom(_req);
-  // Each provider's listSessions() shells out or reads its own store (mimo:
-  // `mimo session list`; codex: state sqlite; claude: bridge). On first boot
-  // these run cold and can dominate. Time each provider separately so
-  // /v1/admin/stats shows which one is the slow one.
+  const url = new URL((_req.url || '/'), `http://${_req.headers.host || 'localhost'}`);
+  const forceRefresh = url.searchParams.get('refresh') === '1';
+  const nowMs = Date.now();
+  // Each provider's listSessions() reads its own store (mimo/codex sqlite) or
+  // shells out (claude/codex CLI, on first boot). Cache per provider with a
+  // short TTL; time each separately (cache-hit vs live) so /v1/admin/stats shows
+  // which one is the slow one and whether the cache is helping.
   const providerSessions = (await Promise.all(allProviders().map(async provider => {
+    const cached = _sessionListCache.get(provider.name);
+    if (!forceRefresh && cached && (nowMs - cached.at) < SESSION_LIST_TTL_MS) {
+      timer?.add(`listSessions.${provider.name}.cached`, 0);
+      return cached.data;
+    }
     const run = async () => {
       try { return await provider.listSessions(); }
       catch { return []; }
     };
-    return timer ? await timer.time(`listSessions.${provider.name}`, run) : await run();
+    const data = timer ? await timer.time(`listSessions.${provider.name}`, run) : await run();
+    _sessionListCache.set(provider.name, { at: Date.now(), data });
+    return data;
   }))).flat();
   const providerSessionById = new Map(
     providerSessions
