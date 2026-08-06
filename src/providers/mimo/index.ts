@@ -109,17 +109,26 @@ function runCli(args: string[], cwd: string | undefined, timeoutMs: number): Pro
   });
 }
 
-/** Map a gateway model suffix to a MiMo `provider/model` id. Default = free auto channel. */
+// Default MiMo model. Was `mimo/mimo-auto` (free auto-routing channel), but MiMo
+// dropped that channel — with the current (token-plan) credential it returns
+// "Unsupported model mimo-auto". Xiaomi also retired the entire v2 line
+// (mimo-v2-pro / -flash / -omni all 404 with "Did you mean mimo-v2.5-pro?").
+// Only the v2.5 family + the deepseek models remain, so the default and the
+// legacy aliases now point at v2.5 equivalents. Verified 2026-08-06 against
+// `mimo models` and live calls.
+const MIMO_DEFAULT_MODEL = 'xiaomi/mimo-v2.5-pro';
+
+/** Map a gateway model suffix to a MiMo `provider/model` id. Default = v2.5-pro. */
 function mimoModelId(providerModel?: string | null): string {
   const m = (providerModel || '').trim();
-  if (!m) return 'mimo/mimo-auto';
+  if (!m) return MIMO_DEFAULT_MODEL;
   if (m.includes('/')) return m; // already a provider/model id
   const map: Record<string, string> = {
-    auto: 'mimo/mimo-auto',
-    'mimo-auto': 'mimo/mimo-auto',
-    flash: 'xiaomi/mimo-v2-flash',
-    omni: 'xiaomi/mimo-v2-omni',
-    pro: 'xiaomi/mimo-v2-pro',
+    // Legacy aliases repointed to live v2.5 models (v2 line + mimo-auto retired).
+    auto: MIMO_DEFAULT_MODEL,
+    'mimo-auto': MIMO_DEFAULT_MODEL,
+    flash: 'xiaomi/mimo-v2.5-pro-ultraspeed', // closest live "fast" tier
+    pro: 'xiaomi/mimo-v2.5-pro',
     'v2.5': 'xiaomi/mimo-v2.5',
     'v2.5-pro': 'xiaomi/mimo-v2.5-pro',
     'v2.5-pro-ultraspeed': 'xiaomi/mimo-v2.5-pro-ultraspeed',
