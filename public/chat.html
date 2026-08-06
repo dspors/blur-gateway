@@ -966,22 +966,58 @@
         : response.output_text
           ? [{ role: 'assistant', text: response.output_text, id: `${response.id}:output` }]
           : [];
+      // Collect all NEW (unseen) messages first, then append them in one DOM
+      // batch. Previously each message called appendMessage → renderMessages(),
+      // which wiped and re-rendered the ENTIRE list per message — O(n²) markdown
+      // renders. On a 607-message history that's ~184k renders and was the slow
+      // part on box3's CPU (the gateway returns the payload in ~390ms; the cost
+      // was all browser-side). Now it's O(n): each new message rendered once.
+      const fresh = [];
       for (const message of messages) {
         const role = message.role || message.type || 'assistant';
         if (role !== 'user' && role !== 'assistant') continue;
         const text = message.text || contentToText(message.content);
         if (role === 'user' && isHiddenProviderUserMessage(text)) continue;
         if (!text) continue;
-        appendMessage({ id: message.id, role, text, timestamp: message.timestamp });
+        const normalized = { id: message.id, role, text, timestamp: message.timestamp };
+        const keys = messageKeys(normalized);
+        if (keys.some(key => state.seenMessageKeys.has(key))) continue;
+        for (const key of keys) state.seenMessageKeys.add(key);
+        normalized.id = normalized.id || keys[0];
+        fresh.push(normalized);
       }
+      if (fresh.length) appendMessages(fresh);
     }
 
+    // Build a bubble element for a message (no DOM insertion).
+    function makeBubble(message) {
+      const bubble = document.createElement('div');
+      bubble.className = `bubble ${message.role === 'user' ? 'user' : message.role === 'error' ? 'error' : 'assistant'}`;
+      bubble.innerHTML = renderMarkdown(message.text);
+      return bubble;
+    }
+
+    // Append one already-normalized+deduped message incrementally.
     function appendMessage(message) {
       const keys = messageKeys(message);
       if (keys.some(key => state.seenMessageKeys.has(key))) return;
       for (const key of keys) state.seenMessageKeys.add(key);
-      state.messages.push({ ...message, id: message.id || keys[0] });
-      renderMessages();
+      const normalized = { ...message, id: message.id || keys[0] };
+      appendMessages([normalized]);
+    }
+
+    // Append a batch of new messages to the DOM in one operation. Keeps the
+    // empty-state placeholder handling consistent with renderMessages().
+    function appendMessages(list) {
+      if (!list.length) return;
+      if (!state.messages.length) els.messages.textContent = ''; // clear placeholder
+      const frag = document.createDocumentFragment();
+      for (const message of list) {
+        state.messages.push(message);
+        frag.appendChild(makeBubble(message));
+      }
+      els.messages.appendChild(frag);
+      els.messages.scrollTop = els.messages.scrollHeight;
     }
 
     function messageKeys(message) {
@@ -1008,12 +1044,9 @@
         els.messages.appendChild(empty);
         return;
       }
-      for (const message of state.messages) {
-        const bubble = document.createElement('div');
-        bubble.className = `bubble ${message.role === 'user' ? 'user' : message.role === 'error' ? 'error' : 'assistant'}`;
-        bubble.innerHTML = renderMarkdown(message.text);
-        els.messages.appendChild(bubble);
-      }
+      const frag = document.createDocumentFragment();
+      for (const message of state.messages) frag.appendChild(makeBubble(message));
+      els.messages.appendChild(frag);
       els.messages.scrollTop = els.messages.scrollHeight;
     }
 
