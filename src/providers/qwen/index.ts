@@ -111,10 +111,19 @@ interface QwenRun {
   errorMessage: string | null;
 }
 
-/** Parse qwen's stream-json (line-delimited) stdout into session id + answer + status. */
+/**
+ * Parse qwen's stream-json (line-delimited) stdout into session id + answer +
+ * status. Verified events (box3, qwen 0.21.6):
+ *   system/init          → carries session_id (a uuid)
+ *   assistant            → message.content[] of {type:"thinking"|"text", …};
+ *                          "thinking" is chain-of-thought — EXCLUDE it.
+ *   result/success|error → is_error + a top-level `result` string = the final
+ *                          answer, already assembled (preferred source).
+ */
 function parseStreamJson(stdout: string): QwenRun {
   let sessionId: string | null = null;
-  let text = '';
+  let assistantText = '';
+  let resultText: string | null = null;
   let isError = false;
   let errorMessage: string | null = null;
   for (const line of stdout.split('\n')) {
@@ -124,20 +133,23 @@ function parseStreamJson(stdout: string): QwenRun {
     try { o = JSON.parse(s); } catch { continue; }
     if (o.session_id && !sessionId) sessionId = o.session_id;
     if (o.type === 'assistant') {
-      // assistant message: OpenAI-style message object; concat any text content.
       const content = o.message?.content;
-      if (typeof content === 'string') text += content;
+      if (typeof content === 'string') assistantText += content;
       else if (Array.isArray(content)) {
         for (const part of content) {
-          if (typeof part === 'string') text += part;
-          else if (part && typeof part.text === 'string') text += part.text;
+          if (typeof part === 'string') { assistantText += part; continue; }
+          // Skip reasoning parts; keep only real answer text.
+          if (part && part.type === 'thinking') continue;
+          if (part && typeof part.text === 'string') assistantText += part.text;
         }
-      } else if (typeof o.message?.text === 'string') text += o.message.text;
+      } else if (typeof o.message?.text === 'string') assistantText += o.message.text;
     } else if (o.type === 'result') {
-      if (o.is_error) { isError = true; errorMessage = o.error?.message || 'qwen run failed'; }
+      if (o.is_error) { isError = true; errorMessage = o.error?.message || o.result || 'qwen run failed'; }
+      else if (typeof o.result === 'string') resultText = o.result;
     }
   }
-  return { sessionId, text, isError, errorMessage };
+  // Prefer the assembled result string; fall back to concatenated assistant text.
+  return { sessionId, text: resultText ?? assistantText, isError, errorMessage };
 }
 
 /** Run a qwen turn; returns session id + concatenated answer text. */
@@ -250,7 +262,19 @@ function findSessionFile(sessionId: string): string | null {
   return null;
 }
 
+// Extract the human-visible text from a qwen JSONL record. Verified schema
+// (box3, qwen 0.21.6): text lives in message.parts[] as {text[, thought]}.
+// A part with `thought: true` is the model's internal reasoning (chain of
+// thought) — EXCLUDE it so the transcript shows answers, not the model
+// thinking out loud. Falls back to the older content/text shapes defensively.
 function extractText(rec: any): string {
+  const parts = rec.message?.parts;
+  if (Array.isArray(parts)) {
+    return parts
+      .filter((p: any) => p && typeof p.text === 'string' && p.thought !== true)
+      .map((p: any) => p.text)
+      .join('');
+  }
   if (typeof rec.text === 'string') return rec.text;
   const content = rec.content ?? rec.message?.content;
   if (typeof content === 'string') return content;
@@ -279,29 +303,36 @@ function readSessionJsonl(
   try { lines = fs.readFileSync(file, 'utf8').split('\n'); } catch { return null; }
 
   let best: { text: string; t: number } | null = null;
+  let contextTokens: number | null = null;
   const messages: BlurMessage[] = [];
   for (const line of lines) {
     const s = line.trim();
     if (!s || s[0] !== '{') continue;
     let rec: any;
     try { rec = JSON.parse(s); } catch { continue; }
-    const role = rec.role || rec.message?.role || rec.type;
-    if (role !== 'user' && role !== 'assistant') continue;
+    // qwen records are keyed by top-level `type` (user/assistant/system). Only
+    // user/assistant carry chat text; system events (session_start, etc.) skip.
+    const kind = rec.type;
+    if (kind !== 'user' && kind !== 'assistant') continue;
+    // Context-window usage: assistant records carry usageMetadata.promptTokenCount
+    // (tokens currently in context). Keep the latest — surfaces as the token chip.
+    const promptTokens = rec.usageMetadata?.promptTokenCount;
+    if (kind === 'assistant' && typeof promptTokens === 'number') contextTokens = promptTokens;
     const text = extractText(rec);
     if (!text.trim()) continue;
     const t = recTimeMs(rec);
     const afterMark = !(sinceMs && t && t <= sinceMs);
-    if (role === 'assistant' && afterMark) best = { text, t };
+    if (kind === 'assistant' && afterMark) best = { text, t };
     if (opts?.wantMessages && afterMark) {
       const msg = normalizeMessage({
         provider: 'qwen-cli',
         providerSessionId: sessionId,
         responseId: opts.responseId,
-        role,
+        role: kind, // normalize to user/assistant (record.message.role is user/model)
         text,
         timestamp: t ? new Date(t).toISOString() : null,
         nativeType: 'qwen.message',
-        nativeId: rec.id || rec.uuid || null,
+        nativeId: rec.uuid || null,
       });
       if (msg) messages.push(msg);
     }
@@ -310,6 +341,7 @@ function readSessionJsonl(
   const result: ReadLatestResult = best
     ? { status: 'completed', outputText: best.text, highWaterIso: best.t ? new Date(best.t).toISOString() : null }
     : { status: 'Processing...', outputText: null, highWaterIso: null };
+  if (contextTokens != null) result.contextTokens = contextTokens;
   if (opts?.wantMessages) {
     const max = opts.maxMessages;
     result.messages = max && messages.length > max ? messages.slice(messages.length - max) : messages;
@@ -338,8 +370,7 @@ function listSessionsFromStore(): DesktopSession[] | null {
           const s = line.trim();
           if (!s || s[0] !== '{') continue;
           let rec: any; try { rec = JSON.parse(s); } catch { continue; }
-          const role = rec.role || rec.message?.role;
-          if (role === 'user') { const t = extractText(rec).trim(); if (t) { title = t.slice(0, 80); break; } }
+          if (rec.type === 'user') { const t = extractText(rec).trim(); if (t) { title = t.slice(0, 80); break; } }
         }
       } catch { /* keep id as title */ }
       let mtime = 0;
