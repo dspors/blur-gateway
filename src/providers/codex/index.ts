@@ -74,6 +74,9 @@ export class CodexProvider implements DesktopProvider {
         timeoutSeconds: 45,
         cwd: input.workspaceDir,
         model: input.providerModel || undefined,
+        // This branch is only reached for the cli provider (guarded above), so
+        // force headless regardless of the process-wide CODEX_SEND_TRANSPORT.
+        transport: 'cli',
       })
       : await codexShield.send(profile(), input.providerSessionTitle, input.prompt, {
       submit: true,
