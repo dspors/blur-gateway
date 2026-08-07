@@ -47,6 +47,13 @@ function mimoDbPath(): string {
 // opened yet, so callers transparently fall back to `mimo export` — no regression.
 let _mimoDb: any = null;
 let _sqliteUnavailable = false;
+
+/** Close and forget the cached handle. */
+function closeMimoDb(): void {
+  if (_mimoDb) { try { _mimoDb.close(); } catch { /* ignore */ } }
+  _mimoDb = null;
+}
+
 function getMimoDb(): any {
   if (_mimoDb) return _mimoDb;
   if (_sqliteUnavailable) return null;
@@ -60,18 +67,26 @@ function getMimoDb(): any {
   try {
     const p = mimoDbPath();
     if (!fs.existsSync(p)) return null; // DB not created yet; retry cheaply later
-    // Open via the immutable URI. mimo runs the DB in WAL mode; a plain open (even
-    // read-write) intermittently fails with "unable to open database file (14)"
-    // when it can't attach the -shm segment while mimo is mid-write — observed in
-    // the gateway log, which forced the session-list direct-read to fall back to
-    // the slow `mimo session list` spawn. `immutable=1` tells SQLite the file
-    // won't change under us, so it bypasses the WAL/-shm/locking machinery and
-    // reads pages directly — no shm, no error 14. Safe: we only ever SELECT.
-    const db = new DatabaseSync(`file:${p}?immutable=1`);
+    // Open READ-ONLY (WAL-visible), NOT `immutable=1`. mimo runs the DB in WAL
+    // mode and writes each assistant message's `part` rows (the reply text) into
+    // the -wal first. `immutable=1` bypasses the WAL/-shm entirely, so a reader
+    // sees the assistant `message` row while its `part` rows are still WAL-only →
+    // the reply looks EMPTY (0 parts), `best` stays null, and the turn never
+    // completes. Short replies may never hit the ~4MB auto-checkpoint threshold,
+    // so the text stays invisible to an immutable reader FOREVER → the response
+    // hangs `in_progress` (this is the "CLI service stuck on the Mac" bug). A
+    // plain read-only open attaches the -shm and sees committed WAL data; a
+    // read-only handle also re-reads the WAL per statement, so the cache never
+    // goes stale (no reopen dance needed). The one tradeoff — an intermittent
+    // "unable to open database file (14)" when mimo is truncating -shm mid-write
+    // — is transient and non-fatal: the caller's catch drops the handle and falls
+    // back to `mimo export` for that poll, then the next poll reopens cleanly.
+    const db = new DatabaseSync(p, { readOnly: true });
     _mimoDb = db;
     return _mimoDb;
   } catch {
-    return null; // transient open failure → fall back this call
+    closeMimoDb(); // transient open failure → fall back this call, reopen next
+    return null;
   }
 }
 
@@ -262,8 +277,7 @@ function readLatestFromDb(
     return result;
   } catch {
     // Locked / schema drift / stale handle — drop it so it reopens, fall back now.
-    try { db.close(); } catch { /* ignore */ }
-    _mimoDb = null;
+    closeMimoDb();
     return null;
   }
 }
@@ -372,8 +386,7 @@ function listSessionsFromDb(): DesktopSession[] | null {
     }));
   } catch {
     // Locked / schema drift — drop the handle so it reopens, fall back this call.
-    try { db.close(); } catch { /* ignore */ }
-    _mimoDb = null;
+    closeMimoDb();
     return null;
   }
 }
