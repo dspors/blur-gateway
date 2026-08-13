@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { allProviders } from '../providers';
+import { allProviders, resolveProviderModel } from '../providers';
 import { db } from '../db/sqlite';
 import { readJson, sendJson } from '../utils/http';
 import { timerFrom } from '../utils/timing';
@@ -21,12 +21,17 @@ export async function listDesktopSessions(_req: IncomingMessage, res: ServerResp
   const timer = timerFrom(_req);
   const url = new URL((_req.url || '/'), `http://${_req.headers.host || 'localhost'}`);
   const forceRefresh = url.searchParams.get('refresh') === '1';
+  const requestedModel = url.searchParams.get('model') || url.searchParams.get('provider') || '';
+  const requestedProvider = requestedModel.trim() ? resolveProviderModel(requestedModel).provider : null;
   const nowMs = Date.now();
   // Each provider's listSessions() reads its own store (mimo/codex sqlite) or
   // shells out (claude/codex CLI, on first boot). Cache per provider with a
   // short TTL; time each separately (cache-hit vs live) so /v1/admin/stats shows
   // which one is the slow one and whether the cache is helping.
-  const providerSessions = (await Promise.all(allProviders().map(async provider => {
+  const providers = requestedProvider
+    ? allProviders().filter(provider => provider.name === requestedProvider)
+    : allProviders();
+  const providerSessions = (await Promise.all(providers.map(async provider => {
     const cached = _sessionListCache.get(provider.name);
     if (!forceRefresh && cached && (nowMs - cached.at) < SESSION_LIST_TTL_MS) {
       timer?.add(`listSessions.${provider.name}.cached`, 0);

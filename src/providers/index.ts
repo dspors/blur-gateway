@@ -140,9 +140,9 @@ export function availableModelOptions(): string[] {
   ];
   if (process.platform === 'linux') return cliModels;
   return [
-    ...cliModels,
     'codex-desktop',
     'claude-desktop',
+    ...cliModels,
   ];
 }
 

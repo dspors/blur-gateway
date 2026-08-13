@@ -55,7 +55,7 @@ export class CodexProvider implements DesktopProvider {
       transport: this.transport === 'desktop' ? 'shield' : 'cli',
       model: input.providerModel || undefined,
     });
-    if (!result.success) throw new Error(result.error || 'Codex prepared-session automation failed');
+    if (!result.success) throw new Error(normalizeCodexTransportError(result.error || 'Codex prepared-session automation failed', this.transport));
     if (result.sessionId) {
       return {
         providerSessionId: result.sessionId,
@@ -82,7 +82,7 @@ export class CodexProvider implements DesktopProvider {
       submit: true,
       timeoutSeconds: 45,
     });
-    if (!result.success) throw new Error(result.error || 'Codex send automation failed');
+    if (!result.success) throw new Error(normalizeCodexTransportError(result.error || 'Codex send automation failed', this.transport));
   }
 
   async rename(input: SendInput, title: string): Promise<void> {
@@ -177,6 +177,16 @@ function jsonlUpdatedAt(jsonlPath?: string | null, fallback?: string | number | 
     if (Number.isFinite(ms)) return new Date(ms).toISOString();
   }
   return null;
+}
+
+function normalizeCodexTransportError(error: string, transport: CodexTransport): string {
+  const message = String(error || '');
+  const activeWriter = message.match(/thread\s+([0-9a-f-]{20,})\s+already has an active writer/i);
+  if (transport === 'cli' && activeWriter) {
+    const threadId = activeWriter[1];
+    return `Codex CLI cannot resume thread ${threadId} because it already has an active writer, usually the Codex desktop app. Select model codex-desktop for this session, or close the active desktop task before using codex-cli.`;
+  }
+  return message;
 }
 
 function normalizeCodexMessages(

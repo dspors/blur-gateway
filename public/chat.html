@@ -675,7 +675,7 @@
         event.preventDefault();
         sendPrompt();
       });
-      await refreshModels(saved.model || 'codex-cli');
+      await refreshModels(saved.model || '');
       refreshSessions();
     }
 
@@ -686,7 +686,7 @@
       setStatus('Loading sessions...');
       try {
         await refreshModels(els.model.value);
-        const data = await api('/v1/desktop/sessions');
+        const data = await api(`/v1/desktop/sessions?model=${encodeURIComponent(els.model.value)}`);
         state.sessions = mergeDesktopSessions(data);
         renderSessions();
         setStatus(`Connected to ${state.endpoint}`);
@@ -719,7 +719,7 @@
     }
 
     function renderModelOptions(models, preferred) {
-      const current = preferred || els.model.value || 'codex-cli';
+      const current = preferred || els.model.value || models[0] || 'codex-cli';
       els.model.textContent = '';
       const values = Array.from(new Set([...models, current].filter(Boolean)));
       for (const value of values) {
@@ -975,7 +975,7 @@
 
     async function refreshSessionsQuietly() {
       try {
-        const data = await api('/v1/desktop/sessions');
+        const data = await api(`/v1/desktop/sessions?model=${encodeURIComponent(els.model.value)}`);
         state.sessions = mergeDesktopSessions(data);
         renderSessions();
       } catch {
@@ -1285,12 +1285,12 @@
         : [];
       const managedProviderIds = new Set(
         managed
-          .map(session => session.provider_session_id)
+          .map(session => providerSessionKey(session.provider, session.provider_session_id))
           .filter(Boolean),
       );
       const providerOnly = Array.isArray(payload?.provider_sessions)
         ? payload.provider_sessions
-          .filter(session => session?.id && !session.archived && !managedProviderIds.has(session.id))
+          .filter(session => session?.id && !session.archived && !managedProviderIds.has(providerSessionKey(session.provider, session.id)))
           .map(session => ({
             id: `provider:${session.provider}:${session.id}`,
             object: 'desktop.session',
@@ -1358,6 +1358,10 @@
       if (workspace) parts.push(workspace);
       if (session.managed === false) parts.push('available');
       return parts.filter(Boolean).join(' · ');
+    }
+
+    function providerSessionKey(provider, id) {
+      return provider && id ? `${provider}:${id}` : null;
     }
 
     function jsonlAge(value) {
