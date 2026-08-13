@@ -687,7 +687,7 @@
       try {
         await refreshModels(els.model.value);
         const data = await api('/v1/desktop/sessions');
-        state.sessions = data.data || [];
+        state.sessions = mergeDesktopSessions(data);
         renderSessions();
         setStatus(`Connected to ${state.endpoint}`);
         restoreSelectedSession();
@@ -755,7 +755,7 @@
         title.textContent = session.title || session.provider_session_title || session.id;
         const meta = document.createElement('div');
         meta.className = 'session-meta';
-        meta.textContent = `${sessionModelLabel(session)} · ${session.provider} · ${session.id}`;
+        meta.textContent = sessionMetaLabel(session);
         const sessionState = document.createElement('div');
         sessionState.className = 'session-state';
         sessionState.textContent = `${sessionStatus(session)} · ${jsonlAge(session.jsonl_updated_at)}`;
@@ -769,22 +769,33 @@
       event.preventDefault();
       event.stopPropagation();
       els.contextMenu.textContent = '';
-      const rename = document.createElement('button');
-      rename.type = 'button';
-      rename.textContent = 'Rename';
-      rename.addEventListener('click', () => {
-        hideContextMenu();
-        renameSession(session);
-      });
-      const del = document.createElement('button');
-      del.type = 'button';
-      del.className = 'danger';
-      del.textContent = 'Delete';
-      del.addEventListener('click', () => {
-        hideContextMenu();
-        deleteSession(session);
-      });
-      els.contextMenu.append(rename, del);
+      if (session.managed === false) {
+        const adopt = document.createElement('button');
+        adopt.type = 'button';
+        adopt.textContent = 'Open in Gateway';
+        adopt.addEventListener('click', () => {
+          hideContextMenu();
+          selectSession(session);
+        });
+        els.contextMenu.append(adopt);
+      } else {
+        const rename = document.createElement('button');
+        rename.type = 'button';
+        rename.textContent = 'Rename';
+        rename.addEventListener('click', () => {
+          hideContextMenu();
+          renameSession(session);
+        });
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'danger';
+        del.textContent = 'Delete';
+        del.addEventListener('click', () => {
+          hideContextMenu();
+          deleteSession(session);
+        });
+        els.contextMenu.append(rename, del);
+      }
       els.contextMenu.classList.remove('hidden');
       const rect = els.contextMenu.getBoundingClientRect();
       const left = Math.min(event.clientX, window.innerWidth - rect.width - 8);
@@ -841,8 +852,19 @@
       }
     }
 
-    function selectSession(session) {
+    async function selectSession(session) {
       stopPolling();
+      if (session.managed === false) {
+        setBusy(true);
+        setStatus(`Opening ${session.title || session.id} in gateway...`);
+        try {
+          session = await adoptProviderSession(session);
+        } catch (err) {
+          setBusy(false);
+          setStatus(err.message, true);
+          return;
+        }
+      }
       state.selected = session;
       state.highWaterMark = null;
       state.messages = [];
@@ -954,7 +976,7 @@
     async function refreshSessionsQuietly() {
       try {
         const data = await api('/v1/desktop/sessions');
-        state.sessions = data.data || [];
+        state.sessions = mergeDesktopSessions(data);
         renderSessions();
       } catch {
       }
@@ -1257,6 +1279,64 @@
       els.status.style.color = isError ? 'var(--error)' : 'var(--text-dim)';
     }
 
+    function mergeDesktopSessions(payload) {
+      const managed = Array.isArray(payload?.data)
+        ? payload.data.map(session => ({ ...session, managed: true }))
+        : [];
+      const managedProviderIds = new Set(
+        managed
+          .map(session => session.provider_session_id)
+          .filter(Boolean),
+      );
+      const providerOnly = Array.isArray(payload?.provider_sessions)
+        ? payload.provider_sessions
+          .filter(session => session?.id && !session.archived && !managedProviderIds.has(session.id))
+          .map(session => ({
+            id: `provider:${session.provider}:${session.id}`,
+            object: 'desktop.session',
+            managed: false,
+            provider: session.provider,
+            model: session.provider,
+            title: session.title || session.id,
+            provider_session_id: session.id,
+            provider_session_title: session.title || session.id,
+            workspace_dir: session.workspace_dir || session.workspaceDir || null,
+            archived: Boolean(session.archived),
+            provider_status: session.status || null,
+            jsonl_updated_at: session.jsonl_updated_at || session.jsonlUpdatedAt || null,
+          }))
+        : [];
+      return [...managed, ...providerOnly];
+    }
+
+    async function adoptProviderSession(session) {
+      const title = session.title || session.provider_session_title || session.provider_session_id;
+      const response = await api('/v1/responses/adopt', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          session_id: session.provider_session_id,
+          provider: session.provider,
+          model: session.model || session.provider,
+          since_timestamp: '1970-01-01T00:00:00.000Z',
+          metadata: {
+            title,
+            workspace_dir: session.workspace_dir || session.workspaceDir || undefined,
+          },
+        }),
+      });
+      const adopted = {
+        ...session,
+        id: response.id,
+        managed: true,
+        title,
+        model: response.model || session.model || session.provider,
+      };
+      state.sessions = state.sessions.map(item => item.id === session.id ? adopted : item);
+      renderSessions();
+      return adopted;
+    }
+
     function sessionStatus(session) {
       const raw = String(session.provider_status || session.status || '').trim();
       if (!raw) return 'Idle';
@@ -1267,6 +1347,17 @@
 
     function sessionModelLabel(session) {
       return session.model || session.provider_model || session.provider || 'model unknown';
+    }
+
+    function sessionMetaLabel(session) {
+      const id = session.managed === false
+        ? session.provider_session_id || session.id
+        : session.id;
+      const parts = [sessionModelLabel(session), session.provider, id];
+      const workspace = session.workspace_dir || session.workspaceDir;
+      if (workspace) parts.push(workspace);
+      if (session.managed === false) parts.push('available');
+      return parts.filter(Boolean).join(' · ');
     }
 
     function jsonlAge(value) {

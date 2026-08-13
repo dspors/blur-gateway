@@ -244,7 +244,7 @@ export async function adoptResponse(req: IncomingMessage, res: ServerResponse): 
   const sinceTimestamp = stringField(body.since_timestamp) || stringField(body.timestamp) || new Date().toISOString();
   const now = new Date().toISOString();
   const responseId = id(provider.name);
-  const workspaceDir = createWorkspace(responseId);
+  const workspaceDir = workspaceDirFromMetadata(body.metadata) || createWorkspace(responseId);
   const title = titleFromMetadata(body.metadata) || sessionId;
   // Bind the chain to the EXISTING session (provider_session_id set up-front).
   db.insertChain({
@@ -832,6 +832,13 @@ function titleFromMetadata(metadata: unknown): string | null {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
   const record = metadata as Record<string, unknown>;
   return typeof record.title === 'string' && record.title.trim() ? record.title.trim() : null;
+}
+
+function workspaceDirFromMetadata(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
+  const record = metadata as Record<string, unknown>;
+  const value = stringField(record.workspace_dir) || stringField(record.workspaceDir);
+  return value && path.isAbsolute(value) ? value : null;
 }
 
 function providerModelFromBody(body: Record<string, unknown> | null | undefined, fallback?: string | null): string | null {
