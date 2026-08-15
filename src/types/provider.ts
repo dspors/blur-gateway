@@ -1,4 +1,4 @@
-export type ProviderName = 'claude' | 'claude-desktop' | 'claude-cli' | 'codex' | 'codex-desktop' | 'codex-cli' | 'mimo' | 'mimo-cli' | 'qwen' | 'qwen-cli' | 'dsh' | 'deepseek';
+export type ProviderName = 'claude' | 'claude-desktop' | 'claude-cli' | 'codex' | 'codex-desktop' | 'codex-cli' | 'mimo' | 'mimo-cli' | 'qwen' | 'qwen-cli' | 'dsh' | 'deepseek' | 'dsh-acp';
 
 export type PreparedSessionInput = {
   chainId: string;

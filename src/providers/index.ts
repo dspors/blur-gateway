@@ -3,6 +3,7 @@ import { CodexProvider } from './codex';
 import { MimoProvider } from './mimo';
 import { QwenProvider } from './qwen';
 import { DshProvider } from './dsh';
+import { DshSdkProvider } from './dsh-sdk';
 import { runExclusive } from './desktop-lock';
 
 // HID methods drive the single shared desktop and MUST be serialized end-to-end:
@@ -29,7 +30,8 @@ const codexDesktop = serializeDesktop(new CodexProvider({ name: 'codex-desktop',
 const codexCli = new CodexProvider({ name: 'codex-cli', transport: 'cli' });
 const mimoCli = new MimoProvider();
 const qwenCli = new QwenProvider();
-const dsh = new DshProvider();
+const dshSdk = new DshSdkProvider();   // resumable, cache-preserving worker path (default for dsh/deepseek)
+const dshAcp = new DshProvider();      // one-shot ACP fallback (no persistent process)
 
 const providers: Record<ProviderName, DesktopProvider> = {
   claude: claudeCli,
@@ -42,8 +44,9 @@ const providers: Record<ProviderName, DesktopProvider> = {
   'mimo-cli': mimoCli,
   qwen: qwenCli,
   'qwen-cli': qwenCli,
-  dsh,
-  deepseek: dsh,
+  dsh: dshSdk,
+  deepseek: dshSdk,
+  'dsh-acp': dshAcp,
 };
 
 export function providerFromModel(model: string | undefined): DesktopProvider {
@@ -92,6 +95,7 @@ export function resolveProviderModel(model: string | undefined): { provider: Pro
   if (normalized === 'opus' || normalized === 'sonnet' || normalized === 'haiku') {
     return { provider: 'claude-cli', providerModel: normalized, model: raw };
   }
+  if (normalized === 'dsh-acp' || normalized.includes('dsh-acp')) return { provider: 'dsh-acp', providerModel: null, model: raw };
   if (normalized.startsWith('dsh-')) return { provider: 'dsh', providerModel: normalized.slice('dsh-'.length), model: raw };
   if (normalized.startsWith('deepseek-')) return { provider: 'dsh', providerModel: normalized.slice('deepseek-'.length), model: raw };
   if (normalized === 'dsh' || normalized === 'deepseek' || normalized.includes('dsh')) return { provider: 'dsh', providerModel: null, model: raw };
@@ -150,9 +154,11 @@ export function availableModelOptions(): string[] {
     'codex-desktop',
     'claude-desktop',
     ...cliModels,
-    // deepseek-harness (dsh) over ACP stdio. Mac-only: needs the built ~/dsh
-    // checkout, which box3 (pre-AVX2 linux) can't build/run. See ./dsh/index.ts.
+    // deepseek-harness (dsh). Mac-only: needs the built ~/dsh checkout, which box3
+    // (pre-AVX2 linux) can't build/run. 'dsh' = the resumable SDK-JSON-RPC path
+    // (./dsh-sdk); 'dsh-acp' = the one-shot ACP fallback (./dsh).
     'dsh',
+    'dsh-acp',
   ];
 }
 
