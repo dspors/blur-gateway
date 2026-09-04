@@ -8,6 +8,7 @@ import { id } from '../utils/ids';
 import { timerFrom } from '../utils/timing';
 import { readJson, sendJson } from '../utils/http';
 import { createWorkspace, attachFilesToWorkspace } from '../storage/files';
+import { writeSessionMcp } from '../mcp-config';
 import { getProvider, resolveProviderModel } from '../providers';
 import { eventId, normalizeReadbackMode } from '../providers/readback';
 import type { BlurMessage, ReadbackMode } from '../types/provider';
@@ -140,6 +141,9 @@ export async function createResponse(req: IncomingMessage, res: ServerResponse):
   } else {
     responseId = id(provider.name);
     const workspaceDir = createWorkspace(responseId);
+    // Residency: write this session's scoped MCP config (the /resident/<holon>/<role>
+    // URL from metadata.mcp_servers) into the workspace so the CLI mounts it.
+    writeSessionMcp(workspaceDir, provider.name, body.metadata);
     const title = titleFromMetadata(body.metadata) || responseId;
     chain = {
       id: responseId,
