@@ -1,0 +1,110 @@
+{
+  "holon": "capability/blur-gateway",
+  "version": "0.1.0",
+  "summary": "OpenAI-Responses-style session gateway. Creates + drives agent sessions (claude-cli / codex-cli / mimo-cli) as durable, resumable 'responses' with a stable id and a high-water read cursor. The substrate Residency uses to staff Residents.",
+  "namespace": "gateway",
+  "$defs": {
+    "Model": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": {"type": "string"},
+        "object": {"type": "string"}
+      }
+    },
+    "ModelList": {
+      "type": "object",
+      "required": ["object", "data"],
+      "properties": {
+        "object": {"type": "string"},
+        "data": {"type": "array", "items": {"$ref": "#/$defs/Model"}}
+      }
+    },
+    "Health": {
+      "type": "object",
+      "required": ["ok"],
+      "properties": {
+        "ok": {"type": "boolean"},
+        "service": {"type": "string"}
+      }
+    },
+    "Chain": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": {"type": "string"},
+        "model": {"type": ["string", "null"]}
+      }
+    },
+    "Response": {
+      "type": "object",
+      "required": ["id", "status"],
+      "properties": {
+        "id": {"type": "string"},
+        "status": {"type": "string"},
+        "model": {"type": ["string", "null"]},
+        "output_text": {"type": ["string", "null"]},
+        "created_at": {"type": ["string", "null"]},
+        "chain": {"$ref": "#/$defs/Chain"},
+        "metadata": {"type": "object"},
+        "message_high_water_mark": {"type": ["string", "number", "null"]},
+        "error": {"type": ["string", "null"]},
+        "input": {}
+      }
+    }
+  },
+  "capabilities": [
+    {"path": "gateway.health", "sideEffect": "read", "category": "support",
+     "description": "Liveness check.",
+     "http": {"method": "GET", "path": "/health"},
+     "input": {"type": "object", "properties": {}},
+     "output": {"$ref": "#/$defs/Health"}},
+
+    {"path": "gateway.models", "sideEffect": "read", "category": "primary",
+     "description": "List the agent model aliases this gateway can spawn (codex-cli-*, claude-cli-*, mimo-cli-*).",
+     "http": {"method": "GET", "path": "/v1/models"},
+     "input": {"type": "object", "properties": {}},
+     "output": {"$ref": "#/$defs/ModelList"}},
+
+    {"path": "gateway.responses.create", "sideEffect": "write", "category": "primary",
+     "description": "Create a response: spawn (or continue) an agent session and return a stable id. Poll it with responses.get. Continue a prior session by passing previous_response_id.",
+     "http": {"method": "POST", "path": "/v1/responses"},
+     "input": {"type": "object", "required": ["model", "input"],
+               "properties": {
+                 "model": {"type": "string"},
+                 "input": {"type": "string"},
+                 "provider": {"type": "string"},
+                 "previous_response_id": {"type": "string"},
+                 "metadata": {"type": "object"}
+               }},
+     "output": {"$ref": "#/$defs/Response"}},
+
+    {"path": "gateway.responses.get", "sideEffect": "read", "category": "primary",
+     "description": "Poll a response by id. Pages forward through the session's output via the high-water cursor; full_history reads from the start.",
+     "http": {"method": "GET", "path": "/v1/responses/{id}",
+              "query": ["high_water_mark", "message_high_water_mark", "full_history", "readback", "include_subagents"]},
+     "input": {"type": "object", "required": ["id"],
+               "properties": {
+                 "id": {"type": "string"},
+                 "high_water_mark": {"type": "string"},
+                 "message_high_water_mark": {"type": "string"},
+                 "full_history": {"type": "string"},
+                 "readback": {"type": "string"},
+                 "include_subagents": {"type": "string"}
+               }},
+     "output": {"$ref": "#/$defs/Response"}},
+
+    {"path": "gateway.responses.adopt", "sideEffect": "write", "category": "support",
+     "description": "Adopt an already-running provider session into a chain so it can be driven via responses.get going forward, without creating a new session.",
+     "http": {"method": "POST", "path": "/v1/responses/adopt"},
+     "input": {"type": "object", "required": ["session_id"],
+               "properties": {
+                 "session_id": {"type": "string"},
+                 "provider": {"type": "string"},
+                 "model": {"type": "string"},
+                 "since_timestamp": {"type": "string"},
+                 "metadata": {"type": "object"}
+               }},
+     "output": {"$ref": "#/$defs/Response"}}
+  ]
+}
