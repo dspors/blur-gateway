@@ -21,10 +21,14 @@ export interface McpServerDecl {
 
 /** Pull a validated mcp_servers list off session metadata (tolerant of shape). */
 export function serversFromMetadata(metadata: unknown): McpServerDecl[] {
+  // Precedence: `mcp_servers` (canonical) over `mcpServers` (camelCase alias).
   const raw = (metadata as any)?.mcp_servers ?? (metadata as any)?.mcpServers;
   if (!Array.isArray(raw)) return [];
+  // `name` must be a safe identifier — it is written verbatim into TOML section
+  // headers (`[mcp_servers.<name>]`), so reject anything that could break/inject.
+  const safeName = /^[A-Za-z0-9_-]+$/;
   return raw
-    .filter((s: any) => s && typeof s.url === 'string' && typeof s.name === 'string')
+    .filter((s: any) => s && typeof s.url === 'string' && typeof s.name === 'string' && safeName.test(s.name))
     .map((s: any) => ({ name: s.name, url: s.url, transport: typeof s.transport === 'string' ? s.transport : 'http' }));
 }
 
@@ -65,8 +69,12 @@ export function writeSessionMcp(workspaceDir: string, providerName: string, meta
     if (providerName.startsWith('claude')) writeClaude(workspaceDir, servers);
     else if (providerName.startsWith('codex')) writeCodex(workspaceDir, servers);
     else writeClaude(workspaceDir, servers); // mimo/qwen/dsh: adapter TBD — .mcp.json as a reasonable default
-  } catch {
-    // MCP config is an enhancement, not a precondition — a failure must not fail the session.
+    // audit: record what was mounted (not silent).
+    console.log(`[mcp-config] ${providerName} session: mounted ${servers.length} MCP server(s): ${servers.map((s) => s.name).join(', ')}`);
+  } catch (e) {
+    // MCP config is an enhancement, not a precondition — a failure must not fail the
+    // session, but it must NOT be silent (was invisible before).
+    console.warn(`[mcp-config] failed to write session MCP config for ${providerName}: ${(e as Error).message}`);
   }
   return servers;
 }
