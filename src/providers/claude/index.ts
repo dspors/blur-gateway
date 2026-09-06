@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { config } from '../../config';
-import type { BlurMessage, DeleteSessionInput, DeleteSessionResult, DesktopProvider, DesktopSession, PreparedSessionInput, ProviderName, ProviderSession, ReadbackMode, ReadLatestResult, SendInput, SpawnInput, SpawnResult } from '../../types/provider';
+import type { BlurMessage, DeleteSessionInput, DeleteSessionResult, DesktopProvider, DesktopSession, PreparedSessionInput, ProviderName, ProviderSession, ReadbackMode, ReadLatestResult, SendInput, SendResult, SpawnInput, SpawnResult } from '../../types/provider';
 import { afterSince, latestTimestamp, normalizeMessage, normalizeToolCall, normalizeToolResult } from '../readback';
 
 const bridgeRequire = createRequire(path.join(config.bridgeRoot, 'package.json'));
@@ -84,6 +84,11 @@ export class ClaudeProvider implements DesktopProvider {
       return {
         providerSessionId: result.sessionId,
         providerSessionTitle: input.title,
+        // The CLI blocks until the turn completes and returns the final result
+        // string authoritatively. Carry it through so the gateway records it as
+        // this turn's output_text instead of re-deriving from the JSONL (which
+        // is fragile for multi-tool turns — the readback bug this fixes).
+        outputText: result.outputText,
       };
     }
 
@@ -125,17 +130,18 @@ export class ClaudeProvider implements DesktopProvider {
     return false;
   }
 
-  async send(input: SendInput): Promise<void> {
+  async send(input: SendInput): Promise<void | SendResult> {
     if (this.transport === 'cli') {
       if (!input.providerSessionId) throw new Error('Claude CLI send requires providerSessionId');
-      await runClaudeCli({
+      const result = await runClaudeCli({
         cwd: input.workspaceDir,
         text: input.prompt,
         sessionId: input.providerSessionId,
         model: input.providerModel || null,
         timeoutMs: CLI_TIMEOUT_MS,
       });
-      return;
+      // Authoritative turn output (see createPreparedSession) for follow-up turns.
+      return { outputText: result.outputText };
     }
 
     const result = await claudeShield.send(input.providerSessionTitle, input.prompt, {

@@ -22,7 +22,17 @@ export type SendInput = {
 export type ProviderSession = {
   providerSessionId: string | null;
   providerSessionTitle: string;
+  // Authoritative final assistant text for THIS turn, when the transport
+  // produces it synchronously (Claude CLI `--output-format json` .result).
+  // When set, it is the turn's canonical output_text — the gateway records it
+  // directly rather than re-deriving from the transcript (see readback fix).
+  outputText?: string | null;
 };
+
+// Result of send() on an existing chain. Transports that reply synchronously
+// (Claude CLI) return the authoritative turn output here; async/automation
+// transports (Claude desktop) return void.
+export type SendResult = { outputText?: string | null };
 
 export type SpawnInput = {
   parentSessionId: string;
@@ -124,7 +134,7 @@ export type ReadLatestResult = {
 export interface DesktopProvider {
   name: ProviderName;
   createPreparedSession(input: PreparedSessionInput): Promise<ProviderSession>;
-  send(input: SendInput): Promise<void>;
+  send(input: SendInput): Promise<void | SendResult>;
   spawn?(input: SpawnInput): Promise<SpawnResult>;
   rename?(session: SendInput, title: string): Promise<void>;
   archive?(session: SendInput): Promise<void>;

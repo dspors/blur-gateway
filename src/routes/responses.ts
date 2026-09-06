@@ -354,7 +354,11 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
           maxMessages: 200,
         });
       }
-      if (latest?.outputText) outputText = latest.outputText;
+      // A completed turn's recorded output is authoritative (notably the Claude
+      // CLI result captured at send-time); readback still runs for rich
+      // messages + high-water paging, but must not overwrite the final text.
+      const outputIsAuthoritative = row.status === 'completed' && Boolean(row.output_text);
+      if (latest?.outputText && !outputIsAuthoritative) outputText = latest.outputText;
       if (latest?.messages?.length) blurMessages = latest.messages;
       if (latest?.contextTokens != null) contextTokens = latest.contextTokens;
       if (latest?.highWaterIso) highWaterMark = encodeHighWaterMark({
@@ -558,6 +562,9 @@ async function runResponse(opts: { responseId: string; chain: any; prompt: strin
       return;
     }
 
+    // Synchronous transports (Claude CLI) return the authoritative turn output
+    // here; automation transports (Claude desktop) do not (reply lands later).
+    let syncOutput: string | null = null;
     if (opts.isNewChain) {
       const session = await provider.createPreparedSession({
         chainId: opts.chain.id,
@@ -568,19 +575,25 @@ async function runResponse(opts: { responseId: string; chain: any; prompt: strin
         providerModel: opts.chain.providerModel || providerModelFromStoredModel(opts.chain.model),
       });
       db.updateChainSession(opts.chain.id, session.providerSessionId, session.providerSessionTitle);
+      if (session.outputText != null) syncOutput = session.outputText;
     } else {
-      await provider.send(sendInput(opts));
+      const sendResult = await provider.send(sendInput(opts));
+      if (sendResult && sendResult.outputText != null) syncOutput = sendResult.outputText;
     }
 
     db.updateChainInputState(opts.chain.id, opts.inputState);
-    // The injection (send) is done, but the assistant has NOT replied yet. Leave
-    // the RESPONSE in_progress so the poll path (getResponse) completes it only
-    // when the reply to THIS turn lands (readback reaches a turn at/after
-    // created_at) — not on send. The automation METRIC still records success.
-    db.updateResponse(opts.responseId, {
-      status: 'in_progress',
-      outputText: null,
-    });
+    // If the transport already produced the turn's authoritative output
+    // (Claude CLI), record it and COMPLETE now — the CLI's own final result is
+    // canonical; re-deriving it from the JSONL is fragile for multi-tool turns
+    // (the readback bug). Otherwise leave the RESPONSE in_progress so the poll
+    // path (getResponse) completes it only when the reply to THIS turn lands
+    // (readback reaches a turn at/after created_at). The automation METRIC
+    // still records success either way.
+    if (syncOutput != null) {
+      db.updateResponse(opts.responseId, { status: 'completed', outputText: syncOutput });
+    } else {
+      db.updateResponse(opts.responseId, { status: 'in_progress', outputText: null });
+    }
     db.updateResponseMetric(opts.metric.id, {
       completedAt: new Date().toISOString(),
       automationStatus: 'completed',
