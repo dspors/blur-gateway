@@ -10,7 +10,7 @@ import { readJson, sendJson } from '../utils/http';
 import { createWorkspace, attachFilesToWorkspace } from '../storage/files';
 import { writeSessionMcp } from '../mcp-config';
 import { getProvider, resolveProviderModel } from '../providers';
-import { eventId, normalizeReadbackMode } from '../providers/readback';
+import { eventId, normalizeReadbackMode, shouldSkipCliReadback } from '../providers/readback';
 import type { BlurMessage, ReadbackMode } from '../types/provider';
 
 type BlurCommandModule = {
@@ -327,7 +327,23 @@ export async function getResponse(_req: IncomingMessage, res: ServerResponse, re
   const priorHighWater = urlHighWater ?? (fullHistory ? null : storedMark);
   let highWaterMark = priorHighWater?.mark || null;
   let contextTokens: number | null = null;
-  if (row.provider_session_id) {
+  // Claude CLI turns are synchronous: the CLI's own result is recorded as the
+  // authoritative output_text at send-time (plus context_tokens from its usage
+  // block). For such a COMPLETED text-mode turn there is nothing more to learn
+  // from the JSONL, so skip the transcript read entirely. Gated to claude-cli
+  // ONLY — the claude-desktop automation path (async reply, no synchronous
+  // result) is never short-circuited and completes via readLatest exactly as
+  // before. Non-text modes (messages/events) still read the JSONL for the
+  // tool-call transcript, which the single result blob cannot reconstruct.
+  const skipCliReadback = shouldSkipCliReadback({
+    provider: row.provider,
+    status: row.status,
+    hasOutput: Boolean(row.output_text),
+    mode: readbackMode,
+  });
+  if (skipCliReadback) {
+    contextTokens = typeof row.context_tokens === 'number' ? row.context_tokens : null;
+  } else if (row.provider_session_id) {
     try {
       const input = storedInput;
       const prompt = input && typeof input === 'object' && !Array.isArray(input)
@@ -565,6 +581,7 @@ async function runResponse(opts: { responseId: string; chain: any; prompt: strin
     // Synchronous transports (Claude CLI) return the authoritative turn output
     // here; automation transports (Claude desktop) do not (reply lands later).
     let syncOutput: string | null = null;
+    let syncContextTokens: number | null = null;
     if (opts.isNewChain) {
       const session = await provider.createPreparedSession({
         chainId: opts.chain.id,
@@ -576,9 +593,11 @@ async function runResponse(opts: { responseId: string; chain: any; prompt: strin
       });
       db.updateChainSession(opts.chain.id, session.providerSessionId, session.providerSessionTitle);
       if (session.outputText != null) syncOutput = session.outputText;
+      if (session.contextTokens != null) syncContextTokens = session.contextTokens;
     } else {
       const sendResult = await provider.send(sendInput(opts));
       if (sendResult && sendResult.outputText != null) syncOutput = sendResult.outputText;
+      if (sendResult && sendResult.contextTokens != null) syncContextTokens = sendResult.contextTokens;
     }
 
     db.updateChainInputState(opts.chain.id, opts.inputState);
@@ -590,7 +609,7 @@ async function runResponse(opts: { responseId: string; chain: any; prompt: strin
     // (readback reaches a turn at/after created_at). The automation METRIC
     // still records success either way.
     if (syncOutput != null) {
-      db.updateResponse(opts.responseId, { status: 'completed', outputText: syncOutput });
+      db.updateResponse(opts.responseId, { status: 'completed', outputText: syncOutput, contextTokens: syncContextTokens });
     } else {
       db.updateResponse(opts.responseId, { status: 'in_progress', outputText: null });
     }

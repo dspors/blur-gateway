@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { config } from '../../config';
 import type { BlurMessage, DeleteSessionInput, DeleteSessionResult, DesktopProvider, DesktopSession, PreparedSessionInput, ProviderName, ProviderSession, ReadbackMode, ReadLatestResult, SendInput, SendResult, SpawnInput, SpawnResult } from '../../types/provider';
-import { afterSince, latestTimestamp, normalizeMessage, normalizeToolCall, normalizeToolResult } from '../readback';
+import { afterSince, cliContextTokensFromResult, latestTimestamp, normalizeMessage, normalizeToolCall, normalizeToolResult } from '../readback';
 
 const bridgeRequire = createRequire(path.join(config.bridgeRoot, 'package.json'));
 const claudeShield = bridgeRequire('./lib/platform/claude-shield.js') as {
@@ -89,6 +89,7 @@ export class ClaudeProvider implements DesktopProvider {
         // this turn's output_text instead of re-deriving from the JSONL (which
         // is fragile for multi-tool turns — the readback bug this fixes).
         outputText: result.outputText,
+        contextTokens: result.contextTokens,
       };
     }
 
@@ -141,7 +142,7 @@ export class ClaudeProvider implements DesktopProvider {
         timeoutMs: CLI_TIMEOUT_MS,
       });
       // Authoritative turn output (see createPreparedSession) for follow-up turns.
-      return { outputText: result.outputText };
+      return { outputText: result.outputText, contextTokens: result.contextTokens };
     }
 
     const result = await claudeShield.send(input.providerSessionTitle, input.prompt, {
@@ -332,6 +333,7 @@ type ClaudeToolUse = { name?: string; toolName?: string; callId?: string; id?: s
 type ClaudeCliResult = {
   sessionId: string | null;
   outputText: string | null;
+  contextTokens: number | null;
   raw: unknown;
 };
 
@@ -417,6 +419,7 @@ function runClaudeCli(opts: {
       resolve({
         sessionId: typeof parsed?.session_id === 'string' ? parsed.session_id : (opts.sessionId || null),
         outputText: typeof parsed?.result === 'string' ? parsed.result : null,
+        contextTokens: cliContextTokensFromResult(parsed),
         raw: parsed,
       });
     });
