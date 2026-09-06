@@ -164,3 +164,39 @@ function parseMaybeJson(value: unknown): unknown {
   if (typeof value !== 'string') return value;
   try { return JSON.parse(value); } catch { return value; }
 }
+
+/**
+ * Whether a poll can skip the provider's transcript readback entirely.
+ *
+ * True ONLY for a completed Claude CLI text-mode turn that already has its
+ * authoritative output recorded: the CLI is synchronous, so its own result was
+ * stored at send-time and there is nothing more to learn from the JSONL.
+ *
+ * Deliberately narrow — this is the desktop-safety contract. The claude-desktop
+ * automation transport (provider 'claude' / 'claude-desktop') has NO synchronous
+ * result; it completes via readLatest, so it must NEVER be skipped. Non-text
+ * readback modes still read the transcript for the tool-call event stream.
+ */
+export function shouldSkipCliReadback(input: {
+  provider: string;
+  status: string;
+  hasOutput: boolean;
+  mode: ReadbackMode;
+}): boolean {
+  return input.provider === 'claude-cli'
+    && input.status === 'completed'
+    && input.hasOutput
+    && input.mode === 'text';
+}
+
+/**
+ * Context-window size (tokens) from a Claude CLI `--output-format json` result:
+ * usage.cache_read_input_tokens — the same signal the JSONL working-history scan
+ * uses — so a CLI turn reports its context size without a transcript read. null
+ * when usage is absent or the field is not a positive number.
+ */
+export function cliContextTokensFromResult(parsed: Record<string, unknown> | null | undefined): number | null {
+  const usage = parsed && typeof parsed.usage === 'object' ? parsed.usage as Record<string, unknown> : null;
+  const read = usage && typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : null;
+  return typeof read === 'number' && read > 0 ? read : null;
+}

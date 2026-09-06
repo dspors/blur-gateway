@@ -3,11 +3,13 @@ const assert = require('node:assert/strict');
 
 const {
   afterSince,
+  cliContextTokensFromResult,
   latestTimestamp,
   normalizeMessage,
   normalizeReadbackMode,
   normalizeToolCall,
   normalizeToolResult,
+  shouldSkipCliReadback,
   timestampAfterSinceOrFallback,
 } = require('../dist/providers/readback.js');
 
@@ -123,4 +125,33 @@ test('timestamp fallback emits parseable one-shot timestamps for invalid or earl
     fallbackBaseMs: created,
     offset: 1,
   }), null);
+});
+
+test('shouldSkipCliReadback skips only a completed claude-cli text turn with output', () => {
+  assert.equal(shouldSkipCliReadback({ provider: 'claude-cli', status: 'completed', hasOutput: true, mode: 'text' }), true);
+  // Not completed, no output, or non-text mode: must still read the transcript.
+  assert.equal(shouldSkipCliReadback({ provider: 'claude-cli', status: 'in_progress', hasOutput: true, mode: 'text' }), false);
+  assert.equal(shouldSkipCliReadback({ provider: 'claude-cli', status: 'completed', hasOutput: false, mode: 'text' }), false);
+  assert.equal(shouldSkipCliReadback({ provider: 'claude-cli', status: 'completed', hasOutput: true, mode: 'messages' }), false);
+  assert.equal(shouldSkipCliReadback({ provider: 'claude-cli', status: 'completed', hasOutput: true, mode: 'events' }), false);
+});
+
+test('shouldSkipCliReadback NEVER skips the claude-desktop path (desktop-safety contract)', () => {
+  // The desktop automation transport has no synchronous result; it completes via
+  // readLatest and must never be short-circuited — even when it looks "done".
+  for (const provider of ['claude', 'claude-desktop', 'codex', 'mimo', 'qwen']) {
+    assert.equal(
+      shouldSkipCliReadback({ provider, status: 'completed', hasOutput: true, mode: 'text' }),
+      false,
+      `${provider} must not be short-circuited`,
+    );
+  }
+});
+
+test('cliContextTokensFromResult reads usage.cache_read_input_tokens, else null', () => {
+  assert.equal(cliContextTokensFromResult({ usage: { cache_read_input_tokens: 14844 } }), 14844);
+  assert.equal(cliContextTokensFromResult({ usage: { cache_read_input_tokens: 0 } }), null);
+  assert.equal(cliContextTokensFromResult({ usage: {} }), null);
+  assert.equal(cliContextTokensFromResult({}), null);
+  assert.equal(cliContextTokensFromResult(null), null);
 });

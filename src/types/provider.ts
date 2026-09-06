@@ -27,12 +27,16 @@ export type ProviderSession = {
   // When set, it is the turn's canonical output_text — the gateway records it
   // directly rather than re-deriving from the transcript (see readback fix).
   outputText?: string | null;
+  // Context-window size (tokens) for the turn, when the transport reports it
+  // synchronously (Claude CLI usage.cache_read_input_tokens). Lets the gateway
+  // record it without re-scanning the JSONL.
+  contextTokens?: number | null;
 };
 
 // Result of send() on an existing chain. Transports that reply synchronously
 // (Claude CLI) return the authoritative turn output here; async/automation
 // transports (Claude desktop) return void.
-export type SendResult = { outputText?: string | null };
+export type SendResult = { outputText?: string | null; contextTokens?: number | null };
 
 export type SpawnInput = {
   parentSessionId: string;

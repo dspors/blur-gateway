@@ -111,6 +111,10 @@ export class Sqlite {
     this.ensureColumn('chains', 'last_input_hash', 'text');
     // Per-request stage timings (JSON {stage: ms}); additive, older rows null.
     this.ensureColumn('request_log', 'stage_timings', 'text');
+    // Context-window size (tokens) for a turn, when a synchronous transport
+    // (Claude CLI) reports it. Lets a completed CLI text turn surface context
+    // usage without re-reading the JSONL transcript. Additive, older rows null.
+    this.ensureColumn('responses', 'context_tokens', 'integer');
   }
 
   exec(sql: string): void {
@@ -206,11 +210,12 @@ export class Sqlite {
         updated_at = excluded.updated_at;`);
   }
 
-  updateResponse(responseId: string, fields: { status?: string; outputText?: string | null; error?: string | null }): void {
+  updateResponse(responseId: string, fields: { status?: string; outputText?: string | null; error?: string | null; contextTokens?: number | null }): void {
     const sets = [`updated_at = ${sqlString(new Date().toISOString())}`];
     if (fields.status !== undefined) sets.push(`status = ${sqlString(fields.status)}`);
     if (fields.outputText !== undefined) sets.push(`output_text = ${sqlString(fields.outputText)}`);
     if (fields.error !== undefined) sets.push(`error = ${sqlString(fields.error)}`);
+    if (fields.contextTokens !== undefined) sets.push(`context_tokens = ${fields.contextTokens === null ? 'null' : Number(fields.contextTokens)}`);
     this.exec(`update responses set ${sets.join(', ')} where id = ${sqlString(responseId)};`);
   }
 
